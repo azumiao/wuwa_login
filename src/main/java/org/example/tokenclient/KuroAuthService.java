@@ -79,23 +79,27 @@ public final class KuroAuthService implements AuthService, ScanService {
         if (!validQr(qrCode)) return CompletableFuture.completedFuture(new ScanResult(Status.FAILURE, "请输入有效的库洛游戏二维码内容。"));
         return post("/user/auth/roleInfos", Map.of("qrCode", qrCode), session.token()).thenApply(data -> {
             if (!ok(data)) return scanResult(data);
+            if (data.path("data").isBoolean() && !data.path("data").asBoolean())
+                return new ScanResult(Status.FAILURE, "二维码扫描未成功，请重新获取二维码。");
             List<Role> roles = new ArrayList<>();
             JsonNode list = data.path("data");
             if (list.isArray()) for (JsonNode role : list) {
                 String id = role.path("id").asText();
-                if (!id.isBlank() && role.path("support").asBoolean(true)) {
+                if (role.path("support").asBoolean(true)) {
                     String name = role.path("roleName").asText();
                     if (name.isBlank()) name = role.path("gameName").asText("游戏角色");
                     roles.add(new Role(id, name + " · " + role.path("serverName").asText("默认区服")));
                 }
             }
-            return roles.isEmpty() ? new ScanResult(Status.FAILURE, "未找到可登录角色，请检查绑定信息。")
-                    : new ScanResult(Status.SUCCESS, "请选择角色并确认登录游戏。", List.copyOf(roles));
+            if (list.isArray() && !list.isEmpty() && roles.isEmpty())
+                return new ScanResult(Status.FAILURE, "二维码中没有受支持的游戏角色。");
+            // KuRo_Scanner confirms successful scans with id="" when no role binding is returned.
+            return new ScanResult(Status.SUCCESS, "扫码成功，请二次确认登录游戏。", List.copyOf(roles));
         }).exceptionally(error -> scanUnavailable());
     }
 
     @Override public CompletionStage<ScanResult> scan(Session session, String qrCode, String roleId, String sms) {
-        if (!validQr(qrCode) || roleId.isBlank() || (!sms.isEmpty() && !sms.matches("[0-9]{6}")))
+        if (!validQr(qrCode) || roleId == null || (!sms.isEmpty() && !sms.matches("[0-9]{6}")))
             return CompletableFuture.completedFuture(new ScanResult(Status.FAILURE, "二维码、角色或验证码无效。"));
         return post("/user/auth/scanLogin", Map.of("qrCode", qrCode, "id", roleId,
                 "autoLogin", "false", "verifyCode", sms), session.token())

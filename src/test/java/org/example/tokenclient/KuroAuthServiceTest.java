@@ -151,6 +151,33 @@ class KuroAuthServiceTest {
         assertEquals(6, requests.size());
     }
 
+    @Test void successfulScanCanBeConfirmedWithoutRoleBindingId() throws Exception {
+        var session = new AuthService.Session("账号", token("123", null));
+        respond = request -> request.path().equals("/user/auth/roleInfos")
+                ? "{\"code\":200,\"data\":[]}" : "{\"code\":200,\"data\":true}";
+        var result = await(service.roles(session, QR));
+        assertEquals(ScanService.Status.SUCCESS, result.status());
+        assertTrue(result.roles().isEmpty());
+        assertEquals(1, requests.size(), "Reading a QR must not confirm login");
+        assertEquals(ScanService.Status.SUCCESS, await(service.scan(session, QR, "", "")).status());
+        assertEquals("/user/auth/scanLogin", requests.getLast().path());
+        assertTrue(requests.getLast().form().containsKey("id"));
+        assertEquals("", requests.getLast().form().get("id"));
+
+        respond = request -> "{\"code\":200,\"data\":[{\"roleName\":\"漂泊者\",\"support\":true}]}";
+        result = await(service.roles(session, QR));
+        assertEquals(ScanService.Status.SUCCESS, result.status());
+        assertEquals("", result.roles().getFirst().id());
+    }
+
+    @Test void explicitlyUnsupportedOrFailedScanDoesNotEnterConfirmation() throws Exception {
+        var session = new AuthService.Session("账号", token("123", null));
+        respond = request -> "{\"code\":200,\"data\":[{\"id\":\"role\",\"support\":false}]}";
+        assertEquals(ScanService.Status.FAILURE, await(service.roles(session, QR)).status());
+        respond = request -> "{\"code\":200,\"data\":false}";
+        assertEquals(ScanService.Status.FAILURE, await(service.roles(session, QR)).status());
+    }
+
     static String token(String id, Long exp) {
         return b64("{\"alg\":\"HS256\"}") + "." + b64("{\"userId\":\"" + id + "\"" + (exp == null ? "" : ",\"exp\":" + exp) + "}")
                 + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(new byte[32]);

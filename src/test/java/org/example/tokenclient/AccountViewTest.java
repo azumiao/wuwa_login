@@ -416,7 +416,13 @@ class AccountViewTest {
             button(dialog.getDialogPane(), "read-qr").fire();
             return null;
         });
-        fx(() -> { button(dialog("scan-dialog"), "confirm-qr").fire(); button(dialog("scan-dialog"), "confirm-qr").fire(); return null; });
+        fx(() -> {
+            assertEquals("二次确认登录", button(dialog("scan-dialog"), "confirm-qr").getText());
+            assertTrue(submissions.isEmpty());
+            button(dialog("scan-dialog"), "confirm-qr").fire();
+            button(dialog("scan-dialog"), "confirm-qr").fire();
+            return null;
+        });
         fx(() -> {
             Parent dialog = dialog("scan-dialog");
             assertTrue(field(dialog, "scan-code").isVisible());
@@ -436,6 +442,116 @@ class AccountViewTest {
             assertEquals(List.of("", "123456"), submissions);
             assertTrue(button(dialog("scan-dialog"), "confirm-qr").isDisabled());
             close(dialog("scan-dialog"));
+            return null;
+        });
+    }
+
+    @Test void decodedImageAutomaticallyShowsSecondConfirmationWithoutRoleIdAndCancelNeverLogsIn(
+            @org.junit.jupiter.api.io.TempDir Path directory) throws Exception {
+        Path image = directory.resolve("game-qr.png");
+        var pixels = new com.google.zxing.qrcode.QRCodeWriter().encode(KuroAuthServiceTest.QR, com.google.zxing.BarcodeFormat.QR_CODE, 300, 300);
+        com.google.zxing.client.j2se.MatrixToImageWriter.writeToPath(pixels, "PNG", image);
+        AtomicInteger reads = new AtomicInteger();
+        AtomicInteger logins = new AtomicInteger();
+        ScanService scanner = new ScanService() {
+            public CompletionStage<ScanResult> roles(AuthService.Session session, String qr) {
+                assertEquals(KuroAuthServiceTest.QR, qr);
+                reads.incrementAndGet();
+                return CompletableFuture.completedFuture(new ScanResult(Status.SUCCESS, "扫码成功"));
+            }
+            public CompletionStage<ScanResult> scan(AuthService.Session session, String qr, String id, String sms) {
+                assertEquals(KuroAuthServiceTest.QR, qr);
+                assertEquals("", id);
+                logins.incrementAndGet();
+                return CompletableFuture.completedFuture(new ScanResult(Status.SUCCESS, "游戏登录成功"));
+            }
+            public CompletionStage<AuthService.CodeResult> sendScanCode(AuthService.Session session, String proof) {
+                throw new AssertionError("Unexpected SMS");
+            }
+        };
+        fx(() -> {
+            var dialog = new ScanLoginDialog(null, new AuthService.Session("13812345678", "token"), scanner,
+                    owner -> CompletableFuture.completedFuture(null), () -> fail("Unexpected invalid token"));
+            dialog.show();
+            dialog.readImage(image);
+            return null;
+        });
+        eventually(() -> fx(() -> !button(dialog("scan-dialog"), "confirm-qr").isDisabled()));
+        fx(() -> {
+            Parent pane = dialog("scan-dialog");
+            assertEquals(1, reads.get());
+            assertEquals(0, logins.get(), "Recognizing a QR must wait for explicit confirmation");
+            assertTrue(pane.lookup("#qr-confirmation").isVisible());
+            assertFalse(pane.lookup("#qr-role").isManaged());
+            assertEquals("二次确认登录", button(pane, "confirm-qr").getText());
+            snapshot(pane, "scan-confirmation");
+            button(pane, "cancel-qr").fire();
+            assertEquals(0, logins.get());
+            assertFalse(pane.lookup("#qr-confirmation").isVisible());
+            assertEquals("", ((TextArea) pane.lookup("#qr-input")).getText());
+            ((TextArea) pane.lookup("#qr-input")).setText(KuroAuthServiceTest.QR);
+            return null;
+        });
+        eventually(() -> fx(() -> !button(dialog("scan-dialog"), "confirm-qr").isDisabled()));
+        fx(() -> {
+            Parent pane = dialog("scan-dialog");
+            assertEquals(2, reads.get(), "Pasted QR must also be scanned automatically");
+            assertEquals(0, logins.get());
+            button(pane, "confirm-qr").fire();
+            button(pane, "confirm-qr").fire();
+            return null;
+        });
+        fx(() -> {
+            Parent pane = dialog("scan-dialog");
+            assertEquals(1, logins.get());
+            assertEquals("已登录", button(pane, "confirm-qr").getText());
+            assertTrue(button(pane, "confirm-qr").isDisabled());
+            close(pane);
+            return null;
+        });
+    }
+
+    @Test void editingQrInvalidatesPreviousConfirmationAndExpiredQrCannotSubmit() throws Exception {
+        var expired = new CompletableFuture<ScanService.ScanResult>();
+        AtomicInteger reads = new AtomicInteger();
+        AtomicInteger logins = new AtomicInteger();
+        ScanService scanner = new ScanService() {
+            public CompletionStage<ScanResult> roles(AuthService.Session session, String qr) {
+                return reads.incrementAndGet() == 1
+                        ? CompletableFuture.completedFuture(new ScanResult(Status.SUCCESS, "扫码成功")) : expired;
+            }
+            public CompletionStage<ScanResult> scan(AuthService.Session session, String qr, String id, String sms) {
+                logins.incrementAndGet();
+                return CompletableFuture.completedFuture(new ScanResult(Status.SUCCESS, "成功"));
+            }
+            public CompletionStage<AuthService.CodeResult> sendScanCode(AuthService.Session session, String proof) {
+                throw new AssertionError("Unexpected SMS");
+            }
+        };
+        fx(() -> {
+            var dialog = new ScanLoginDialog(null, new AuthService.Session("账号", "token"), scanner,
+                    owner -> CompletableFuture.completedFuture(null), () -> fail("Unexpected invalid token"));
+            dialog.show();
+            ((TextArea) dialog.getDialogPane().lookup("#qr-input")).setText(KuroAuthServiceTest.QR);
+            return null;
+        });
+        eventually(() -> fx(() -> !button(dialog("scan-dialog"), "confirm-qr").isDisabled()));
+        fx(() -> {
+            Parent pane = dialog("scan-dialog");
+            ((TextArea) pane.lookup("#qr-input")).setText(KuroAuthServiceTest.QR + "new");
+            assertTrue(button(pane, "confirm-qr").isDisabled());
+            assertFalse(pane.lookup("#qr-confirmation").isVisible());
+            return null;
+        });
+        eventually(() -> reads.get() == 2);
+        expired.complete(new ScanService.ScanResult(ScanService.Status.EXPIRED, "二维码已过期"));
+        fx(() -> {
+            Parent pane = dialog("scan-dialog");
+            assertTrue(label(pane, "scan-feedback").getText().contains("已过期"));
+            assertTrue(button(pane, "confirm-qr").isDisabled());
+            button(pane, "confirm-qr").fire();
+            assertEquals(0, logins.get());
+            close(pane);
             return null;
         });
     }
