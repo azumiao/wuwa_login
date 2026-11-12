@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>库街区人机验证</title>
+  <style>
+    body { font: 16px sans-serif; padding: 24px; color: #263044; background: #fff; }
+    button { padding: 10px 18px; cursor: pointer; }
+    #status { line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <p id="status" role="status">正在加载验证组件…</p>
+  <div id="geetest-div"></div>
+  <button id="show" type="button" hidden>显示验证符号</button>
+  <script>
+    (function () {
+      var message = document.getElementById('status');
+      var show = document.getElementById('show');
+      function post(route, body, done) {
+        var request = new XMLHttpRequest();
+        request.open('POST', route, true);
+        request.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
+        request.timeout = 5000;
+        request.onload = function () { if (done) done(request.status === 200); };
+        request.onerror = request.ontimeout = function () { if (done) done(false); };
+        request.send(body);
+      }
+      function state(value, text) {
+        message.textContent = text;
+        post('status', value);
+      }
+      window.addEventListener('error', function () {
+        state('init-error', '验证组件运行失败。请在应用中选择系统浏览器重试。');
+      });
+      var script = document.createElement('script');
+      script.src = __SDK_URL__;
+      script.onerror = function () {
+        state('sdk-error', '无法下载极验组件，请检查网络后重试，或在系统浏览器中完成验证。');
+      };
+      script.onload = function () {
+        try {
+          if (typeof initGeetest4 !== 'function') throw new Error('SDK unavailable');
+          state('initializing', '组件已下载，正在加载验证符号…');
+          initGeetest4({
+            captchaId: '3f7e2d848ce0cb7e7d019d621e556ce2',
+            product: 'bind',
+            clientType: 'android',
+            language: 'zho'
+          }, function (captcha) {
+            captcha.onReady(function () {
+              state('ready', '请根据图案提示完成验证。');
+              show.hidden = false;
+              show.onclick = function () {
+                state('ready', '请根据图案提示完成验证。');
+                captcha.showCaptcha();
+              };
+              captcha.showCaptcha();
+            }).onSuccess(function () {
+              var proof = captcha.getValidate();
+              if (!proof) return;
+              state('ready', '验证通过，正在返回应用…');
+              post('complete', JSON.stringify(proof), function (ok) {
+                message.textContent = ok ? '验证已返回应用，可以关闭此页面。' : '应用连接已断开，请返回应用重新获取验证码。';
+                if (ok) { show.hidden = true; captcha.destroy(); }
+              });
+            }).onError(function () {
+              state('widget-error', '验证符号加载失败，请检查网络或使用系统浏览器。');
+            }).onClose(function () {
+              state('closed', '已关闭验证，点击“显示验证符号”可继续。');
+            });
+          });
+        } catch (error) {
+          state('init-error', '验证组件初始化失败，请使用系统浏览器完成验证。');
+        }
+      };
+      document.head.appendChild(script);
+    }());
+  </script>
+</body>
+</html>

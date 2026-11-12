@@ -57,6 +57,11 @@ public final class AccountView extends BorderPane {
         this.credentials = credentials;
     }
 
+    AccountView(AuthService auth, CredentialStore credentials, CaptchaProvider captcha) {
+        this(auth, credentials);
+        this.captcha = captcha;
+    }
+
     AccountView(AuthService auth, CredentialStore credentials, CaptchaProvider captcha, Consumer<String> copyToken) {
         this(auth, false, copyToken);
         this.credentials = credentials;

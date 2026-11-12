@@ -14,7 +14,8 @@ public final class TokenClientApp extends Application {
         } else {
             var credentials = new FileCredentialStore(java.nio.file.Path.of(System.getProperty("user.home"), ".wuwa_login"));
             try {
-                view = new AccountView(new KuroAuthService(credentials.deviceId()), credentials);
+                view = new AccountView(new KuroAuthService(credentials.deviceId()), credentials,
+                        new GeetestCaptcha(uri -> getHostServices().showDocument(uri.toString())));
             } catch (java.io.IOException error) {
                 new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.ERROR,
                         "无法初始化本地登录存储，请检查用户目录权限后重试。").showAndWait();

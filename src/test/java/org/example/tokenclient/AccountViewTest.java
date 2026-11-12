@@ -449,13 +449,117 @@ class AccountViewTest {
 
     @Test void officialCaptchaWindowCanOpenAndCancel() throws Exception {
         AtomicReference<CompletionStage<String>> result = new AtomicReference<>();
-        fx(() -> {
-            GeetestCaptcha captcha = new GeetestCaptcha();
-            result.set(captcha.verify(null));
-            captcha.cancel();
-            return null;
+        var sdk = mockSdk("window.initGeetest4 = function() {};");
+        try {
+            fx(() -> {
+                GeetestCaptcha captcha = new GeetestCaptcha(uri -> fail("Unexpected browser"), sdkUrl(sdk));
+                result.set(captcha.verify(null));
+                captcha.cancel();
+                return null;
+            });
+            assertNull(result.get().toCompletableFuture().get(5, TimeUnit.SECONDS));
+        } finally { sdk.stop(0); }
+    }
+
+    @Test void realWebViewInitializesSdkOnHttpOriginAndSendsSmsAfterCallback() throws Exception {
+        var sdk = mockSdk("""
+                window.initGeetest4 = function(config, complete) {
+                  if (location.protocol !== 'http:' || config.clientType !== 'android' || config.product !== 'bind')
+                    throw new Error('Wrong origin or configuration');
+                  var success;
+                  var widget = {
+                    onReady: function(fn) { setTimeout(fn, 20); return widget; },
+                    onSuccess: function(fn) { success = fn; return widget; },
+                    onError: function(fn) { return widget; },
+                    onClose: function(fn) { return widget; },
+                    showCaptcha: function() { setTimeout(function(){success();}, 20); },
+                    getValidate: function() { return {lot_number:'lot',captcha_output:'output',pass_token:'pass',gen_time:'123'}; },
+                    destroy: function() {}
+                  };
+                  complete(widget);
+                };
+                """);
+        AtomicInteger sends = new AtomicInteger();
+        GeetestCaptcha captcha = new GeetestCaptcha(uri -> fail("Unexpected system browser"), sdkUrl(sdk));
+        try {
+            fx(() -> {
+                AccountView view = persistentView(new AuthService() {
+                    @Override public boolean requiresCaptcha() { return true; }
+                    @Override public CompletionStage<CodeResult> sendCode(String phone, String proof) {
+                        assertEquals(KuroAuthServiceTest.PROOF, proof);
+                        sends.incrementAndGet();
+                        return CompletableFuture.completedFuture(new CodeResult(true, "短信已发送"));
+                    }
+                }, new MemoryCredentials(), captcha);
+                field(view, "phone-input").setText("13812345678");
+                button(view, "phone-login").fire();
+                assertEquals(0, sends.get());
+                return null;
+            });
+            eventually(() -> sends.get() == 1);
+            fx(() -> {
+                assertTrue(button(dialog("phone-dialog"), "send-code").isDisabled());
+                assertTrue(label(dialog("phone-dialog"), "sms-feedback").getText().contains("已发送"));
+                return null;
+            });
+        } finally { fx(() -> { captcha.cancel(); return null; }); sdk.stop(0); }
+    }
+
+    @Test void initializationErrorIsVisibleAndSystemBrowserCallbackCompletesVerification() throws Exception {
+        var sdk = mockSdk("window.initGeetest4 = function() { throw new Error('unsupported browser'); };");
+        AtomicReference<java.net.URI> opened = new AtomicReference<>();
+        GeetestCaptcha captcha = new GeetestCaptcha(opened::set, sdkUrl(sdk));
+        CompletionStage<String> result = fx(() -> captcha.verify(null));
+        try {
+            try {
+                eventually(() -> fx(() -> label(dialog("captcha-dialog"), "captcha-status").getText().contains("初始化或加载失败")));
+            } catch (AssertionError error) {
+                fail(fx(() -> {
+                    Parent pane = dialog("captcha-dialog");
+                    var engine = ((javafx.scene.web.WebView) pane.lookup("#captcha-web")).getEngine();
+                    return label(pane, "captcha-status").getText() + " / " + engine.getLoadWorker().getState()
+                            + " / " + engine.executeScript("document.body.textContent");
+                }), error);
+            }
+            fx(() -> { button(dialog("captcha-dialog"), "captcha-browser").fire(); return null; });
+            java.net.URI page = opened.get();
+            assertNotNull(page);
+            var client = java.net.http.HttpClient.newHttpClient();
+            var response = client.send(java.net.http.HttpRequest.newBuilder(page).GET().build(), java.net.http.HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            var callback = java.net.http.HttpRequest.newBuilder(page.resolve("complete"))
+                    .header("Origin", "http://" + page.getAuthority())
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(KuroAuthServiceTest.PROOF)).build();
+            assertEquals(200, client.send(callback, java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
+            assertEquals(KuroAuthServiceTest.PROOF, result.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            assertThrows(java.io.IOException.class, () -> client.send(callback, java.net.http.HttpResponse.BodyHandlers.ofString()));
+        } finally { fx(() -> { captcha.cancel(); return null; }); sdk.stop(0); }
+    }
+
+    private static com.sun.net.httpserver.HttpServer mockSdk(String script) throws Exception {
+        var server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/sdk.js", exchange -> {
+            byte[] content = script.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/javascript");
+            exchange.sendResponseHeaders(200, content.length);
+            exchange.getResponseBody().write(content);
+            exchange.close();
         });
-        assertNull(result.get().toCompletableFuture().get(5, TimeUnit.SECONDS));
+        server.start();
+        return server;
+    }
+
+    private static String sdkUrl(com.sun.net.httpserver.HttpServer server) {
+        return "http://127.0.0.1:" + server.getAddress().getPort() + "/sdk.js";
+    }
+
+    private static void eventually(Callable<Boolean> condition) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+        while (System.nanoTime() < deadline) {
+            if (condition.call()) return;
+            Thread.sleep(25);
+        }
+        fail("Timed out waiting for asynchronous verification");
     }
 
     private AccountView persistentView(AuthService service, CredentialStore store, CaptchaProvider captcha) {
