@@ -5,12 +5,15 @@ import java.util.concurrent.CompletionStage;
 
 /** Network operations must return immediately and complete off the JavaFX thread. */
 public interface AuthService {
-    record Session(String account, String token) {
+    record Session(String account, String token, String deviceId) {
+        public Session(String account, String token) { this(account, token, ""); }
         public Session {
             if (account == null || account.isBlank() || token == null || token.isBlank()
                     || token.chars().anyMatch(Character::isWhitespace)) {
                 throw new IllegalArgumentException("登录结果缺少账号或有效 Token");
             }
+            if (deviceId == null || !deviceId.isEmpty() && !TokenInput.validDeviceId(deviceId))
+                throw new IllegalArgumentException("登录结果中的设备标识不合法");
         }
 
         @Override public String toString() { return "Session[credentials redacted]"; }
@@ -47,5 +50,9 @@ public interface AuthService {
 
     default CompletionStage<Result> loginWithToken(String token) {
         return CompletableFuture.completedFuture(new Result(false, "Token 登录接口尚未接入。", null));
+    }
+
+    default CompletionStage<Result> loginWithToken(String token, String deviceId) {
+        return loginWithToken(token);
     }
 }

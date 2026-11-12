@@ -18,11 +18,13 @@ IntelliJ IDEA 中重新加载 Maven 项目，也可运行 `org.example.Main`。
 2. 自动打开官方极验 v4 验证窗口，按提示点选符号或完成滑块。验证通过后，向 `/user/getSmsCode` 提交验证结果并发送短信。内置窗口加载失败时，点击「在系统浏览器完成验证」，完成后结果自动返回应用。取消、加载失败或超时均不会发送短信，可点击「获取验证码」重试。
 3. 输入 6 位短信验证码，调用 `/user/sdkLogin`。取得 Token 后，再通过 `/user/mineV2` 核实当前登录账号；成功才进入账号页并保存凭据。
 
-已有 Token 可直接粘贴登录。客户端先拒绝错误格式、`demo-` Token、非 HS256、缺少用户 ID 或明确过期的 JWT，再向官方接口核验身份。**本地解析 JWT 不验证签名，也不作为登录成功依据**；必须得到官方成功响应、匹配的用户 ID 和当前登录用户标记。没有 `exp` 的 Token 同样需要在线验证。
+已有 Token 可直接粘贴登录，也支持 `token, did`、中文逗号，以及 `添加token token, did` 格式。逗号前是 JWT，逗号后是设备标识，不是 JWT 的一部分。导入时会保留配套 did，验证成功后与 Token 一起保存，扫码时使用该会话的设备标识。只导入 Token 时使用本应用的设备标识；已知原 did 时请一并导入。
+
+客户端先拒绝错误格式、`demo-` Token、非 HS256、缺少用户 ID 或明确过期的 JWT，再向官方接口核验身份。**本地解析 JWT 不验证签名，也不作为登录成功依据**；必须得到官方成功响应、匹配的用户 ID 和当前登录用户标记。没有 `exp` 的 Token 同样需要在线验证。账号页「获取 Token」分别显示 Token 和 did，支持「复制 Token」及「复制 Token + did」。
 
 每次启动都重新核验保存的 Token，验证完成前保持未登录。官方明确返回失效（如 `220`）时清除缓存；断网、超时、限流、无法识别的响应保持未登录并保留凭据，可点击「重试本地登录」或「清除本地登录」。
 
-登录信息保存在当前用户目录的 `~/.wuwa_login/session.json`，设备标识保存在 `device-id`。文件采用临时文件替换写入；POSIX 系统限制目录为 `700`、文件为 `600`，Windows 继承用户目录访问权限。Token 当前以明文保存在这个用户私有文件中，不要分享该文件。关闭窗口保留凭据，主动退出登录删除凭据并保留设备标识，避免每次启动被视为新设备。演示模式不会读写真实登录信息。
+登录信息及配套 did 保存在当前用户目录的 `~/.wuwa_login/session.json`；本应用手机号登录的默认设备标识保存在 `device-id`。新设备标识使用 UUID，已有 40 位十六进制设备标识仍会保留；旧版会话文件没有 did 时，在线核验后使用原本地设备标识迁移。文件采用临时文件替换写入；POSIX 系统限制目录为 `700`、文件为 `600`，Windows 继承用户目录访问权限。Token 当前以明文保存在这个用户私有文件中，不要分享该文件。关闭窗口保留凭据，主动退出登录删除凭据并保留设备标识，避免每次启动被视为新设备。演示模式不会读写真实登录信息。
 
 验证页参考 [DSVVA/KuRo_Scanner 的 WindowGeeTest](https://github.com/DSVVA/KuRo_Scanner/blob/main/src/UI/WindowGeeTest.cpp)，通过 `http://127.0.0.1:随机端口/随机路径/index.html` 加载，设置 `clientType: "android"`。参考项目使用 Windows WebView2，本项目保留跨平台 JavaFX WebKit，并提供系统浏览器入口解决内置引擎兼容性问题。脚本下载、初始化和组件错误均显示提示，15 秒仍未就绪时提示使用系统浏览器。
 
@@ -40,6 +42,8 @@ IntelliJ IDEA 中重新加载 Maven 项目，也可运行 `org.example.Main`。
 短信发送成功后有 60 秒重试倒计时。请求期间防止重复提交，关闭弹窗后忽略迟到响应。网络超时的扫码请求不会自动重发，界面提示结果尚未确认。
 
 修改或取消二维码会清除原来的确认状态；扫描失败、二维码过期或角色明确不受支持时不能确认登录。手动「扫描二维码」按钮可用于失败后的重试。
+
+短信、登录、扫描、确认请求使用同一设备上下文，并按 KuRo_Scanner 对齐 `source=android`、`version=2.5.0`、`versionCode=2500`、`devCode=did`，同时提供独立的 `did` 请求头。扫码验证、二次确认、扫码短信分别显示服务端错误码与脱敏原因，HTTP 错误也显示状态码；不会输出原始 Token、did、二维码或短信验证码。HTTP 403/一般业务拒绝不会直接当作 Token 过期。二次确认按参考项目以明确的 `code=200` 判定成功，同时拒绝显式的 `success=false` / `data=false`。
 
 直播监视与自动识别直播画面的功能仍待接入；本次提供手动图片扫码入口和可供后续识别流程调用的 `ScanService`。
 
@@ -59,5 +63,7 @@ mvn test -Dpreview.dir=target/previews
 - [Haiyu 的 KuroClient](https://github.com/HaiyuGame/Haiyu/blob/master/src/Haiyu.KuroClient/KuroClient.cs)：扫码接口、角色字段。
 - [KuRo_Scanner 社区实现](https://github.com/cjh-better/wuthering-waves-scancer/blob/master/utils/kuro_api.py)：扫码短信参数；[状态处理](https://github.com/cjh-better/wuthering-waves-scancer/blob/master/ui/main_window.py)中的 `2240` / `2209`。
 - [mineV2 接口记录](https://github.com/TomyJan/Kuro-API-Collection/blob/main/API/user/mineV2.md)：Token 认证与当前用户标记。
+- [DSVVA/KuRo_Scanner 的 KuRoApi](https://github.com/DSVVA/KuRo_Scanner/blob/main/src/Core/KuRoApi.cpp)：扫码请求头、设备标识、表单字段及二次确认成功判据。
+- [XutheringWavesUID 的 Token 帮助](https://github.com/Loping151/XutheringWavesUID/blob/main/XutheringWavesUID/wutheringwaves_help/help.json)：`添加token <token>,<did>` 格式；[请求实现](https://github.com/Loping151/XutheringWavesUID/blob/main/XutheringWavesUID/utils/api/requests.py)使用独立的设备标识。
 
 实际运行需能访问 `api.kurobbs.com`、`static.geetest.com`、`gcaptcha4.geetest.com` 及极验返回的静态资源域名。当前云环境的网络策略未开放库街区和极验域名，因此真实验证码图案、短信下发、真实 Token 和游戏扫码尚未进行在线联调；本地模拟测试不能代替这部分验证。上游接口或 captcha ID 变更时需更新对应适配。

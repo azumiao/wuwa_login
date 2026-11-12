@@ -679,7 +679,11 @@ class AccountViewTest {
     }
 
     private AccountView persistentView(AuthService service, CredentialStore store, CaptchaProvider captcha) {
-        AccountView view = new AccountView(service, store, captcha, token -> {});
+        return persistentView(service, store, captcha, token -> {});
+    }
+
+    private AccountView persistentView(AuthService service, CredentialStore store, CaptchaProvider captcha, java.util.function.Consumer<String> copy) {
+        AccountView view = new AccountView(service, store, captcha, copy);
         views.add(view);
         Stage stage = new Stage();
         stage.setScene(new Scene(view, 1100, 800));
@@ -687,6 +691,46 @@ class AccountViewTest {
         view.applyCss();
         view.layout();
         return view;
+    }
+
+    @Test void pairedTokenCanBeImportedExportedAndRestoredWithItsOwnDevice() throws Exception {
+        String jwt = KuroAuthServiceTest.token("123", null);
+        String did = KuroAuthServiceTest.IMPORTED_DEVICE;
+        MemoryCredentials store = new MemoryCredentials();
+        AtomicReference<String> copied = new AtomicReference<>();
+        AtomicInteger validations = new AtomicInteger();
+        AuthService service = new AuthService() {
+            @Override public CompletionStage<Result> loginWithToken(String token, String deviceId) {
+                assertEquals(jwt, token);
+                assertEquals(did, deviceId);
+                validations.incrementAndGet();
+                return CompletableFuture.completedFuture(new Result(true, "成功", new Session("账号", token, deviceId)));
+            }
+        };
+        AccountView current = fx(() -> {
+            var view = persistentView(service, store, owner -> CompletableFuture.completedFuture(null), copied::set);
+            field(view, "token-input").setText("添加token " + jwt + "， " + did);
+            button(view, "login-button").fire();
+            return view;
+        });
+        fx(() -> {
+            assertEquals(did, store.saved.deviceId());
+            button(current, "get-token").fire();
+            Parent pane = dialog("token-dialog");
+            assertEquals(jwt, field(pane, "export-token").getText());
+            assertEquals(did, field(pane, "export-device").getText());
+            button(pane, "copy-token-device").fire();
+            assertEquals(jwt + ", " + did, copied.get());
+            button(pane, "copy-token").fire();
+            assertEquals(jwt, copied.get());
+            close(pane);
+            current.dispose();
+            current.getScene().getWindow().hide();
+            var reopened = persistentView(service, store, owner -> CompletableFuture.completedFuture(null));
+            reopened.restoreSession();
+            return null;
+        });
+        fx(() -> { assertEquals(2, validations.get()); assertEquals(did, store.saved.deviceId()); return null; });
     }
 
     private AccountView view(AuthService auth, boolean demo, java.util.function.Consumer<String> copy) {

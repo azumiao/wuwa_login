@@ -106,8 +106,8 @@ public final class AccountView extends BorderPane {
         phone.setOnAction(event -> phoneLogin.fire());
         hiddenToken.setId("token-input");
         visibleToken.setId("token-visible");
-        hiddenToken.setPromptText("粘贴已有的 Access Token");
-        visibleToken.setPromptText("粘贴已有的 Access Token");
+        hiddenToken.setPromptText("粘贴 Token，或 token, did");
+        visibleToken.setPromptText("粘贴 Token，或 token, did");
         visibleToken.textProperty().bindBidirectional(hiddenToken.textProperty());
         showToken(false);
         reveal.setId("reveal-token");
@@ -204,11 +204,10 @@ public final class AccountView extends BorderPane {
             message("请先输入 Token。", true);
             return;
         }
-        if (token.chars().anyMatch(Character::isWhitespace)) {
-            message("Token 中不能包含空格或换行，请检查后重试。", true);
-            return;
-        }
-        validateToken(token, false);
+        try {
+            TokenInput input = TokenInput.parse(token);
+            validateToken(input.token(), input.deviceId(), false);
+        } catch (IllegalArgumentException error) { message(error.getMessage(), true); }
     }
 
     /** Called once after opening the window; cached data is never an authenticated session. */
@@ -218,7 +217,7 @@ public final class AccountView extends BorderPane {
             var saved = credentials.load();
             if (saved.isPresent()) {
                 showSavedActions(true);
-                validateToken(saved.get().token(), true);
+                validateToken(saved.get().token(), saved.get().deviceId(), true);
             }
         } catch (java.io.IOException error) {
             showSavedActions(true);
@@ -226,12 +225,12 @@ public final class AccountView extends BorderPane {
         }
     }
 
-    private void validateToken(String token, boolean restoring) {
+    private void validateToken(String token, String deviceId, boolean restoring) {
         setBusy(true);
         long request = ++generation;
         message("正在验证 Token…", false);
         try {
-            auth.loginWithToken(token).whenComplete((result, error) -> Platform.runLater(() -> {
+            auth.loginWithToken(token, deviceId).whenComplete((result, error) -> Platform.runLater(() -> {
                 if (request != generation) return;
                 setBusy(false);
                 if (error != null || result == null) {
@@ -359,6 +358,14 @@ public final class AccountView extends BorderPane {
         Button copy = new Button("复制 Token");
         copy.setId("copy-token");
         copy.getStyleClass().add("primary");
+        TextField device = new TextField(session.deviceId());
+        device.setId("export-device");
+        device.setEditable(false);
+        device.setPromptText("当前会话未提供 did");
+        Button copyPair = new Button("复制 Token + did");
+        copyPair.setId("copy-token-device");
+        copyPair.getStyleClass().add("secondary");
+        copyPair.setDisable(session.deviceId().isEmpty());
         Label tip = label(demo ? "演示 Token 仅保留在内存中。" : credentialsSaved
                 ? "Token 已保存在本地，退出登录后清除。请勿分享给他人。"
                 : "Token 未能保存到本地，请勿分享给他人。", "muted");
@@ -373,11 +380,19 @@ public final class AccountView extends BorderPane {
                 tip.setText("复制失败，请显示 Token 后手动复制。");
             }
         });
-        VBox body = new VBox(18, label(demo ? "演示账号 Token" : "当前账号 Token", "section-title"), row(input, toggle), copy, tip);
+        copyPair.setOnAction(event -> {
+            try {
+                if (session == null || session.deviceId().isEmpty()) return;
+                copyToken.accept(session.token() + ", " + session.deviceId());
+                tip.setText("已复制 token, did，可用于支持此格式的项目。");
+            } catch (RuntimeException error) { tip.setText("复制失败，请手动复制 Token 和 did。"); }
+        });
+        VBox body = new VBox(18, label(demo ? "演示账号 Token" : "当前账号 Token 与 did", "section-title"),
+                row(input, toggle), label("设备标识 did（与当前 Token 配套）", "field-label"), device, row(copy, copyPair), tip);
         body.setPadding(new Insets(20));
         body.setPrefWidth(520);
         dialog.getDialogPane().setContent(body);
-        dialog.setOnHidden(event -> { secret.clear(); plain.clear(); tokenDialog = null; });
+        dialog.setOnHidden(event -> { secret.clear(); plain.clear(); device.clear(); tokenDialog = null; });
         dialog.show();
     }
 

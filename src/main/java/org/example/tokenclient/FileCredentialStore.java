@@ -18,9 +18,9 @@ final class FileCredentialStore implements CredentialStore {
         Path file = directory.resolve("device-id");
         if (Files.exists(file)) {
             String id = Files.readString(file).strip();
-            if (id.matches("[a-f0-9]{40}")) return id;
+            if (TokenInput.validDeviceId(id)) return id;
         }
-        String id = (UUID.randomUUID().toString() + UUID.randomUUID()).replace("-", "").substring(0, 40);
+        String id = UUID.randomUUID().toString().toUpperCase(java.util.Locale.ROOT);
         write(file, id);
         return id;
     }
@@ -31,7 +31,8 @@ final class FileCredentialStore implements CredentialStore {
         if (Files.size(file) > 16384) throw new IOException("本地凭据损坏");
         try {
             var data = JSON.readTree(Files.readString(file));
-            return Optional.of(new AuthService.Session(data.path("account").asText(), data.path("token").asText()));
+            return Optional.of(new AuthService.Session(data.path("account").asText(), data.path("token").asText(),
+                    data.path("deviceId").asText("")));
         } catch (RuntimeException error) {
             throw new IOException("本地凭据损坏");
         }
