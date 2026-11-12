@@ -9,8 +9,7 @@
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javafx.version>21.0.6</javafx.version>
-        <platform.name>默认平台</platform.name>
-        <platform.tokenUrl></platform.tokenUrl>
+        <app.demo>true</app.demo>
     </properties>
     <dependencies>
         <dependency>
@@ -36,8 +35,7 @@
                 <configuration>
                     <mainClass>org.example.Main</mainClass>
                     <options>
-                        <option>-Dplatform.name=${platform.name}</option>
-                        <option>-Dplatform.tokenUrl=${platform.tokenUrl}</option>
+                        <option>-Dapp.demo=${app.demo}</option>
                     </options>
                 </configuration>
             </plugin>

@@ -1,6 +1,5 @@
 package org.example.tokenclient;
 
-import java.net.URI;
 import java.util.Objects;
 import java.util.function.Consumer;
 import javafx.application.Platform;
@@ -8,134 +7,167 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.*;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
 import javafx.scene.layout.*;
 
 public final class AccountView extends BorderPane {
+    private final AuthService auth;
+    private final boolean demo;
+    private final Consumer<String> copyToken;
+    private final TextField phone = new TextField();
     private final PasswordField hiddenToken = new PasswordField();
     private final TextField visibleToken = new TextField();
     private final ToggleButton reveal = new ToggleButton("显示");
-    private final Button login = new Button("Token 登录");
-    private final Label feedback = new Label("Token 仅用于本次登录，不会保存到本地。");
+    private final Button phoneLogin = new Button("手机号登录");
+    private final Button tokenLogin = new Button("Token 登录");
+    private final TextField room = new TextField();
+    private final Button monitor = new Button("开始监视");
+    private final Label monitorStatus = new Label("等待中");
+    private final Label feedback = new Label("请选择一种方式登录。");
     private final Label status = new Label("●  未登录");
+    private final VBox card = new VBox(22);
+    private final Label accountName = new Label();
+    private final Label previewTitle = new Label("等待直播画面");
+    private AuthService.Session session;
+    private PhoneLoginDialog phoneDialog;
+    private Dialog<Void> tokenDialog;
     private boolean busy;
+    private boolean monitoring;
+    private long generation;
 
-    public AccountView(PlatformConfig config, TokenAuthService auth, Consumer<URI> openBrowser) {
+    public AccountView(AuthService auth, boolean demo) {
+        this(auth, demo, token -> {
+            ClipboardContent content = new ClipboardContent();
+            content.putString(token);
+            if (!Clipboard.getSystemClipboard().setContent(content)) {
+                throw new IllegalStateException("Clipboard unavailable");
+            }
+        });
+    }
+
+    AccountView(AuthService auth, boolean demo, Consumer<String> copyToken) {
+        this.auth = Objects.requireNonNull(auth);
+        this.demo = demo;
+        this.copyToken = Objects.requireNonNull(copyToken);
         getStylesheets().add(Objects.requireNonNull(getClass().getResource("account.css")).toExternalForm());
         getStyleClass().add("app");
         setLeft(sidebar());
-        BorderPane content = new BorderPane();
-        content.setTop(topbar());
-        setCenter(content);
-
-        Label heading = label("账号", "page-title");
-        Label subtitle = label("连接你的平台账号，开始使用客户端。", "muted");
-        HBox title = new HBox(16, new VBox(8, heading, subtitle), spacer(), label("ACCOUNT / 01", "eyebrow"));
-        title.setAlignment(Pos.CENTER_LEFT);
-
-        VBox account = new VBox(22);
-        account.getStyleClass().add("card");
-        HBox accountHeader = new HBox(12, badge("◎", "account-icon"), new VBox(5,
-                label("平台账号", "section-title"), label("通过 Token 验证身份", "muted")), spacer(), status);
-        accountHeader.setAlignment(Pos.CENTER_LEFT);
-        status.getStyleClass().add("status");
+        HBox topbar = new HBox(label("工作空间  /  账号", "muted"), spacer(), label("PHONE / TOKEN", "eyebrow"));
+        topbar.getStyleClass().add("topbar");
+        topbar.setAlignment(Pos.CENTER_LEFT);
+        HBox title = row(new VBox(8, label("wuwa_login", "page-title"),
+                label("连接账号，监视你的直播间。", "muted")), spacer(), label("ACCOUNT / 01", "eyebrow"));
+        card.getStyleClass().add("card");
+        card.setMaxWidth(Double.MAX_VALUE);
+        feedback.setId("feedback");
+        feedback.setWrapText(true);
+        feedback.getStyleClass().add("feedback");
+        feedback.setMinHeight(28);
         status.setId("login-status");
-
-        HBox platform = new HBox(12, badge("P", "platform-icon"), new VBox(5,
-                label(config.name(), "platform-name"), label("当前平台", "muted")), spacer(), label("固定平台", "platform-tag"));
-        platform.setAlignment(Pos.CENTER_LEFT);
-        platform.getStyleClass().add("platform-row");
-
+        status.getStyleClass().add("status");
+        phone.setId("phone-input");
+        phone.setPromptText("输入手机号");
+        phone.setTextFormatter(new TextFormatter<String>(change ->
+                change.getControlNewText().matches("[0-9]{0,11}") ? change : null));
+        phoneLogin.setId("phone-login");
+        phoneLogin.getStyleClass().add("primary");
+        phoneLogin.setOnAction(event -> openPhoneLogin());
+        phone.setOnAction(event -> phoneLogin.fire());
         hiddenToken.setId("token-input");
         visibleToken.setId("token-visible");
-        hiddenToken.setPromptText("粘贴你的 Access Token");
-        visibleToken.setPromptText("粘贴你的 Access Token");
+        hiddenToken.setPromptText("粘贴已有的 Access Token");
+        visibleToken.setPromptText("粘贴已有的 Access Token");
         visibleToken.textProperty().bindBidirectional(hiddenToken.textProperty());
-        visibleToken.setVisible(false);
-        visibleToken.setManaged(false);
-        hiddenToken.setMaxWidth(Double.MAX_VALUE);
-        visibleToken.setMaxWidth(Double.MAX_VALUE);
-        StackPane input = new StackPane(hiddenToken, visibleToken);
-        HBox.setHgrow(input, Priority.ALWAYS);
+        showToken(false);
         reveal.setId("reveal-token");
         reveal.getStyleClass().add("reveal");
         reveal.setAccessibleText("显示或隐藏 Token");
-        reveal.setOnAction(event -> {
-            boolean show = reveal.isSelected();
-            hiddenToken.setVisible(!show);
-            hiddenToken.setManaged(!show);
-            visibleToken.setVisible(show);
-            visibleToken.setManaged(show);
-            reveal.setText(show ? "隐藏" : "显示");
-            TextField active = show ? visibleToken : hiddenToken;
-            active.requestFocus();
-            active.positionCaret(active.getLength());
-        });
-        HBox tokenRow = new HBox(8, input, reveal);
-        tokenRow.setAlignment(Pos.CENTER_LEFT);
-        Label tokenLabel = label("Access Token", "field-label");
-        tokenLabel.setLabelFor(hiddenToken);
-        VBox field = new VBox(10, tokenLabel, tokenRow, label("在平台获取 Token 后，粘贴到这里完成登录。", "muted"));
-
-        login.setId("login-button");
-        login.getStyleClass().add("primary");
-        login.setDefaultButton(true);
-        login.setMaxWidth(Double.MAX_VALUE);
-        HBox.setHgrow(login, Priority.ALWAYS);
-        Button getToken = new Button("获取 Token  ↗");
-        getToken.setId("get-token");
-        getToken.getStyleClass().add("secondary");
-        getToken.setOnAction(event -> {
-            if (config.tokenUrl().isEmpty()) {
-                message("尚未配置获取 Token 的网址，请先补充平台地址。", true);
-                return;
-            }
-            try {
-                openBrowser.accept(config.tokenUrl().get());
-                message("已打开平台页面，获取 Token 后请返回此处登录。", false);
-            } catch (RuntimeException error) {
-                message("无法打开浏览器，请检查系统默认浏览器设置。", true);
-            }
-        });
-        login.setOnAction(event -> submit(auth));
-        hiddenToken.setOnAction(event -> login.fire());
-        visibleToken.setOnAction(event -> login.fire());
-        feedback.setId("feedback");
-        feedback.getStyleClass().add("feedback");
-        feedback.setWrapText(true);
-        feedback.setMinHeight(42);
-        account.getChildren().addAll(accountHeader, new Separator(), platform, field,
-                new HBox(12, login, getToken), feedback);
-        account.setMaxWidth(Double.MAX_VALUE);
-
-        VBox guide = new VBox(23, label("登录指南", "section-title"),
-                label("只需三步，连接你的账号。", "muted"),
-                step("01", "获取 Token", "点击「获取 Token」，前往平台完成授权。"),
-                step("02", "粘贴 Token", "复制平台提供的 Token，填入左侧输入框。"),
-                step("03", "登录账号", "点击「Token 登录」，验证后即可使用。"),
-                new Separator(), label("妥善保管你的 Token", "field-label"),
-                wrapped("Token 是账号访问凭证，请勿分享给他人。", "muted"));
-        guide.getStyleClass().add("guide-card");
-        guide.setPrefWidth(260);
-        guide.setMinWidth(220);
-        HBox columns = new HBox(22, account, guide);
-        HBox.setHgrow(account, Priority.ALWAYS);
-        columns.setAlignment(Pos.TOP_LEFT);
-
-        VBox body = new VBox(28, title, columns,
-                label("单一平台 · Token 授权登录", "footer"));
-        body.setPadding(new Insets(34));
+        reveal.setOnAction(event -> showToken(reveal.isSelected()));
+        tokenLogin.setId("login-button");
+        tokenLogin.getStyleClass().add("secondary");
+        tokenLogin.setOnAction(event -> loginWithToken());
+        hiddenToken.setOnAction(event -> tokenLogin.fire());
+        visibleToken.setOnAction(event -> tokenLogin.fire());
+        room.setId("room-input");
+        room.setPromptText("输入直播间账号 / 房间号");
+        monitor.setId("monitor-button");
+        monitor.getStyleClass().add("primary");
+        monitor.setOnAction(event -> toggleMonitor());
+        room.setOnAction(event -> monitor.fire());
+        monitorStatus.setId("monitor-status");
+        monitorStatus.getStyleClass().add("status");
+        accountName.setId("current-account");
+        accountName.getStyleClass().add("account-name");
+        previewTitle.getStyleClass().add("preview-title");
+        VBox body = new VBox(22, title);
+        body.setPadding(new Insets(28));
+        if (demo) {
+            Label banner = label("界面演示模式 · 不发送真实短信，不验证真实账号或连接直播流。", "demo-banner");
+            banner.setId("demo-banner");
+            banner.setWrapText(true);
+            banner.setMaxWidth(Double.MAX_VALUE);
+            body.getChildren().add(banner);
+        }
+        body.getChildren().add(card);
         ScrollPane scroll = new ScrollPane(body);
         scroll.setFitToWidth(true);
         scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        content.setCenter(scroll);
+        BorderPane content = new BorderPane(scroll);
+        content.setTop(topbar);
+        setCenter(content);
+        showLogin();
+        sceneProperty().addListener((observable, oldScene, newScene) -> {
+            if (oldScene != null && newScene == null) dispose();
+        });
     }
 
-    private void submit(TokenAuthService auth) {
-        if (busy) return;
+    private void showLogin() {
+        status.setText("●  未登录");
+        status.getStyleClass().remove("connected");
+        phoneLogin.setDefaultButton(true);
+        HBox phoneRow = row(phone, phoneLogin);
+        HBox.setHgrow(phone, Priority.ALWAYS);
+        StackPane tokenInput = new StackPane(hiddenToken, visibleToken);
+        HBox.setHgrow(tokenInput, Priority.ALWAYS);
+        Label phoneLabel = label("手机号", "field-label");
+        phoneLabel.setLabelFor(phone);
+        Label tokenLabel = label("已有 Token", "field-label");
+        tokenLabel.setLabelFor(hiddenToken);
+        Separator beforeToken = new Separator();
+        Separator afterToken = new Separator();
+        HBox.setHgrow(beforeToken, Priority.ALWAYS);
+        HBox.setHgrow(afterToken, Priority.ALWAYS);
+        card.getChildren().setAll(
+                row(badge("◎"), new VBox(5, label("手机号登录", "section-title"),
+                        label("使用验证码登录，或直接使用已有 Token。", "muted")), spacer(), status),
+                new Separator(), new VBox(10, phoneLabel, phoneRow),
+                row(beforeToken, label("或使用 Token 登录", "muted"), afterToken),
+                new VBox(10, tokenLabel, row(tokenInput, reveal, tokenLogin)), feedback);
+    }
+
+    private void openPhoneLogin() {
+        if (busy || session != null || phoneDialog != null) return;
+        String number = phone.getText();
+        if (!number.matches("1[3-9][0-9]{9}")) {
+            message("请输入正确的 11 位手机号。", true);
+            phone.requestFocus();
+            return;
+        }
+        PhoneLoginDialog dialog = new PhoneLoginDialog(getScene() == null ? null : getScene().getWindow(), number, auth, demo);
+        phoneDialog = dialog;
+        dialog.setOnHidden(event -> {
+            phoneDialog = null;
+            if (dialog.getResult() != null) enterSession(dialog.getResult());
+        });
+        dialog.show();
+    }
+
+    private void loginWithToken() {
+        if (busy || session != null || phoneDialog != null) return;
         String token = hiddenToken.getText().strip();
         if (token.isEmpty()) {
             message("请先输入 Token。", true);
-            hiddenToken.requestFocus();
             return;
         }
         if (token.chars().anyMatch(Character::isWhitespace)) {
@@ -143,27 +175,18 @@ public final class AccountView extends BorderPane {
             return;
         }
         setBusy(true);
+        long request = ++generation;
         message("正在验证 Token…", false);
         try {
-            auth.login(token).whenComplete((result, error) -> Platform.runLater(() -> {
+            auth.loginWithToken(token).whenComplete((result, error) -> Platform.runLater(() -> {
+                if (request != generation) return;
                 setBusy(false);
                 if (error != null || result == null) {
-                    // Never display exception messages that may contain credentials.
                     message("登录失败，请检查网络或稍后重试。", true);
+                } else if (result.success()) {
+                    enterSession(result.session());
                 } else {
-                    status.setText(result.success() ? "●  已登录" : "●  未登录");
-                    status.getStyleClass().remove("connected");
-                    if (result.success()) {
-                        status.getStyleClass().add("connected");
-                        hiddenToken.clear();
-                        reveal.setSelected(false);
-                        hiddenToken.setVisible(true);
-                        hiddenToken.setManaged(true);
-                        visibleToken.setVisible(false);
-                        visibleToken.setManaged(false);
-                        reveal.setText("显示");
-                    }
-                    message(result.message(), !result.success());
+                    message(result.message(), true);
                 }
             }));
         } catch (RuntimeException error) {
@@ -172,13 +195,164 @@ public final class AccountView extends BorderPane {
         }
     }
 
+    private void enterSession(AuthService.Session value) {
+        generation++;
+        session = value;
+        hiddenToken.clear();
+        phone.clear();
+        showToken(false);
+        phoneLogin.setDefaultButton(false);
+        status.setText(demo ? "●  演示登录" : "●  已登录");
+        status.getStyleClass().add("connected");
+        accountName.setText(maskPhone(value.account()));
+        Button logout = new Button("退出登录");
+        logout.setId("logout-button");
+        logout.getStyleClass().add("secondary");
+        logout.setOnAction(event -> logout());
+        Button getToken = new Button("获取 Token");
+        getToken.setId("get-token");
+        getToken.getStyleClass().add("secondary");
+        getToken.setOnAction(event -> openToken());
+        HBox roomRow = row(room, monitor);
+        HBox.setHgrow(room, Priority.ALWAYS);
+        Label roomLabel = label("直播间账号", "field-label");
+        roomLabel.setLabelFor(room);
+        VBox previewCopy = new VBox(14, label("▣", "preview-icon"), previewTitle,
+                label(demo ? "演示预览 · 暂无直播画面" : "开始监视后在这里显示直播画面", "muted"));
+        previewCopy.setAlignment(Pos.CENTER);
+        StackPane preview = new StackPane(previewCopy);
+        preview.setId("stream-preview");
+        preview.getStyleClass().add("preview");
+        preview.setMinHeight(220);
+        preview.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(preview, Priority.ALWAYS);
+        VBox details = new VBox(16, label("运行状态", "field-label"), monitorStatus,
+                new Separator(), label("识别耗时", "muted"), label("— ms", "metric"));
+        details.setMinWidth(140);
+        card.getChildren().setAll(
+                row(badge("◎"), new VBox(5, label("当前账号", "muted"), accountName), spacer(), status, logout, getToken),
+                new Separator(), new VBox(10, roomLabel, roomRow), row(preview, details), feedback);
+        message(demo ? "已进入演示账号，可获取 Token 或预览监视交互。" : "登录成功，请输入直播间账号。", false);
+    }
+
+    private void openToken() {
+        if (session == null || tokenDialog != null) return;
+        Dialog<Void> dialog = new Dialog<>();
+        tokenDialog = dialog;
+        if (getScene() != null && getScene().getWindow() != null) dialog.initOwner(getScene().getWindow());
+        dialog.setTitle("当前账号的 Token");
+        dialog.setResultConverter(button -> null);
+        dialog.getDialogPane().setId("token-dialog");
+        dialog.getDialogPane().getStylesheets().add(getStylesheets().getFirst());
+        dialog.getDialogPane().getStyleClass().add("app");
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        ((Button) dialog.getDialogPane().lookupButton(ButtonType.CLOSE)).setText("关闭");
+        PasswordField secret = new PasswordField();
+        secret.setText(session.token());
+        secret.setId("export-token");
+        secret.setEditable(false);
+        TextField plain = new TextField();
+        plain.setText(session.token());
+        plain.setId("export-token-visible");
+        plain.setEditable(false);
+        plain.setVisible(false);
+        plain.setManaged(false);
+        StackPane input = new StackPane(secret, plain);
+        HBox.setHgrow(input, Priority.ALWAYS);
+        ToggleButton toggle = new ToggleButton("显示");
+        toggle.setId("export-reveal");
+        toggle.getStyleClass().add("reveal");
+        toggle.setOnAction(event -> {
+            boolean show = toggle.isSelected();
+            secret.setVisible(!show);
+            secret.setManaged(!show);
+            plain.setVisible(show);
+            plain.setManaged(show);
+            toggle.setText(show ? "隐藏" : "显示");
+        });
+        Button copy = new Button("复制 Token");
+        copy.setId("copy-token");
+        copy.getStyleClass().add("primary");
+        Label tip = label("Token 仅保留在内存中，退出登录后清除。请勿分享给他人。", "muted");
+        tip.setId("copy-feedback");
+        tip.setWrapText(true);
+        copy.setOnAction(event -> {
+            try {
+                if (session == null) return;
+                copyToken.accept(session.token());
+                tip.setText("已复制到剪贴板。");
+            } catch (RuntimeException error) {
+                tip.setText("复制失败，请显示 Token 后手动复制。");
+            }
+        });
+        VBox body = new VBox(18, label(demo ? "演示账号 Token" : "当前账号 Token", "section-title"), row(input, toggle), copy, tip);
+        body.setPadding(new Insets(20));
+        body.setPrefWidth(520);
+        dialog.getDialogPane().setContent(body);
+        dialog.setOnHidden(event -> { secret.clear(); plain.clear(); tokenDialog = null; });
+        dialog.show();
+    }
+
+    private void toggleMonitor() {
+        if (session == null) return;
+        if (!monitoring && room.getText().isBlank()) {
+            message("请先输入直播间账号或房间号。", true);
+            return;
+        }
+        if (!demo) {
+            message("直播流获取与扫码功能将在后续阶段接入。", true);
+            return;
+        }
+        monitoring = !monitoring;
+        room.setDisable(monitoring);
+        monitor.setText(monitoring ? "停止监视" : "开始监视");
+        monitorStatus.setText(monitoring ? "演示监视中" : "等待中");
+        monitorStatus.getStyleClass().remove("connected");
+        if (monitoring) monitorStatus.getStyleClass().add("connected");
+        previewTitle.setText(monitoring ? "正在演示监视交互" : "等待直播画面");
+        message(monitoring ? "当前为界面演示，尚未连接直播流。" : "已停止演示监视。", false);
+    }
+
+    private void logout() {
+        dispose();
+        room.clear();
+        room.setDisable(false);
+        monitoring = false;
+        monitor.setText("开始监视");
+        monitorStatus.setText("等待中");
+        monitorStatus.getStyleClass().remove("connected");
+        previewTitle.setText("等待直播画面");
+        accountName.setText("");
+        showLogin();
+        message("已退出登录，当前会话已清除。", false);
+    }
+
+    public void dispose() {
+        generation++;
+        if (phoneDialog != null) phoneDialog.close();
+        if (tokenDialog != null) tokenDialog.close();
+        session = null;
+        hiddenToken.clear();
+        phone.clear();
+        setBusy(false);
+        showToken(false);
+    }
+
     private void setBusy(boolean value) {
         busy = value;
-        login.setDisable(value);
-        hiddenToken.setDisable(value);
-        visibleToken.setDisable(value);
-        reveal.setDisable(value);
-        login.setText(value ? "验证中…" : "Token 登录");
+        for (Control control : new Control[]{phone, phoneLogin, hiddenToken, visibleToken, reveal, tokenLogin}) {
+            control.setDisable(value);
+        }
+        tokenLogin.setText(value ? "验证中…" : "Token 登录");
+    }
+
+    private void showToken(boolean show) {
+        reveal.setSelected(show);
+        reveal.setText(show ? "隐藏" : "显示");
+        hiddenToken.setVisible(!show);
+        hiddenToken.setManaged(!show);
+        visibleToken.setVisible(show);
+        visibleToken.setManaged(show);
     }
 
     private void message(String text, boolean error) {
@@ -187,11 +361,13 @@ public final class AccountView extends BorderPane {
         if (error) feedback.getStyleClass().add("error");
     }
 
+    static String maskPhone(String account) {
+        return account.matches("1[3-9][0-9]{9}") ? account.substring(0, 3) + "****" + account.substring(7) : account;
+    }
+
     private static Node sidebar() {
-        Label brand = label("P", "brand");
-        HBox logo = new HBox(10, brand, label("平台客户端", "brand-name"));
-        logo.setAlignment(Pos.CENTER_LEFT);
-        VBox side = new VBox(34, logo, label("工作空间", "nav-caption"), label("◎    账号", "nav-active"));
+        HBox logo = row(badge("W"), label("wuwa_login", "brand-name"));
+        VBox side = new VBox(28, logo, label("工作空间", "nav-caption"), label("◎    账号", "nav-active"));
         Region space = new Region();
         VBox.setVgrow(space, Priority.ALWAYS);
         side.getChildren().addAll(space, label("桌面客户端", "muted"), label("JavaFX  /  v1.0", "sidebar-version"));
@@ -200,31 +376,16 @@ public final class AccountView extends BorderPane {
         return side;
     }
 
-    private static Node topbar() {
-        HBox bar = new HBox(label("工作空间  /  账号", "muted"), spacer(), label("TOKEN ACCESS", "eyebrow"));
-        bar.getStyleClass().add("topbar");
-        bar.setAlignment(Pos.CENTER_LEFT);
-        return bar;
+    private static HBox row(Node... nodes) {
+        HBox row = new HBox(12, nodes);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
     }
 
-    private static Node step(String number, String title, String text) {
-        VBox copy = new VBox(7, label(title, "field-label"), wrapped(text, "muted"));
-        HBox.setHgrow(copy, Priority.ALWAYS);
-        return new HBox(12, badge(number, "step-number"), copy);
-    }
-
-    private static Label wrapped(String text, String style) {
-        Label label = label(text, style);
-        label.setWrapText(true);
-        label.setMaxWidth(Double.MAX_VALUE);
-        label.setMinWidth(0);
-        return label;
-    }
-
-    private static Label badge(String text, String style) {
-        Label label = label(text, style);
-        label.setAlignment(Pos.CENTER);
-        return label;
+    private static Label badge(String text) {
+        Label badge = label(text, "account-icon");
+        badge.setAlignment(Pos.CENTER);
+        return badge;
     }
 
     private static Label label(String text, String style) {

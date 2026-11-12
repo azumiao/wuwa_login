@@ -12,15 +12,10 @@
 .page-title { -fx-font-size: 28px; -fx-font-weight: bold; -fx-text-fill: #202c43; }
 .section-title { -fx-font-size: 16px; -fx-font-weight: bold; }
 .card { -fx-background-color: white; -fx-background-radius: 14; -fx-border-color: #e6eaf2; -fx-border-radius: 14; -fx-padding: 26; }
-.guide-card { -fx-background-color: #edf1fa; -fx-background-radius: 14; -fx-padding: 25 22; }
 .account-icon { -fx-background-color: #eef1ff; -fx-text-fill: #586ddd; -fx-font-size: 22px; -fx-min-width: 44; -fx-min-height: 44; -fx-background-radius: 12; }
 .status { -fx-font-size: 11px; -fx-text-fill: #9099a8; -fx-background-color: #f1f3f6; -fx-padding: 5 9; -fx-background-radius: 20; }
 .status.connected { -fx-text-fill: #238569; -fx-background-color: #e8f5ef; }
 .separator .line { -fx-border-color: #e9edf4; -fx-border-width: 1 0 0 0; }
-.platform-row { -fx-background-color: #f7f9fc; -fx-background-radius: 9; -fx-padding: 14; }
-.platform-icon { -fx-min-width: 36; -fx-min-height: 36; -fx-background-color: #e6ebff; -fx-background-radius: 9; -fx-text-fill: #5c6cba; -fx-font-size: 17px; -fx-font-weight: bold; }
-.platform-name { -fx-font-weight: bold; -fx-font-size: 13px; }
-.platform-tag { -fx-text-fill: #8b96a9; -fx-font-size: 10px; }
 .field-label { -fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: #43516b; }
 .text-field { -fx-background-color: #ffffff; -fx-border-color: #dce2ed; -fx-border-radius: 7; -fx-background-radius: 7; -fx-padding: 12; -fx-prompt-text-fill: #a0a9ba; -fx-text-fill: #34415a; }
 .text-field:focused { -fx-border-color: #6276e6; -fx-effect: dropshadow(gaussian, rgba(82,103,223,0.12), 5, 0, 0, 0); }
@@ -34,7 +29,13 @@
 .button:disabled, .toggle-button:disabled { -fx-opacity: 0.6; }
 .feedback { -fx-text-fill: #8b96a9; -fx-font-size: 11px; -fx-padding: 8 0 0 0; }
 .feedback.error { -fx-text-fill: #c05d59; }
-.step-number { -fx-text-fill: #7181b8; -fx-background-color: #e0e6f5; -fx-min-width: 28; -fx-min-height: 28; -fx-background-radius: 8; -fx-font-size: 10px; -fx-font-weight: bold; }
+.account-name { -fx-font-size: 17px; -fx-font-weight: bold; }
+.demo-banner { -fx-background-color: #fff6df; -fx-text-fill: #957027; -fx-background-radius: 8; -fx-padding: 12 16; -fx-font-size: 12px; }
+.preview { -fx-background-color: #f4f6fb; -fx-background-radius: 10; -fx-border-color: #e6eaf2; -fx-border-radius: 10; }
+.preview-icon { -fx-text-fill: #a7b2cb; -fx-font-size: 40px; }
+.preview-title { -fx-text-fill: #64728c; -fx-font-size: 14px; -fx-font-weight: bold; }
+.metric { -fx-font-size: 22px; -fx-text-fill: #5267df; }
+.dialog-pane { -fx-background-color: white; }
 .footer { -fx-text-fill: #a3abba; -fx-font-size: 11px; }
 .scroll-pane, .scroll-pane > .viewport { -fx-background-color: transparent; }
 .scroll-pane { -fx-padding: 0; -fx-background-insets: 0; }
