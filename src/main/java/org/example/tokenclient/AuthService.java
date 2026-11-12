@@ -3,7 +3,7 @@ package org.example.tokenclient;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
-/** Asynchronous boundary for the real login API in the next implementation stage. */
+/** Network operations must return immediately and complete off the JavaFX thread. */
 public interface AuthService {
     record Session(String account, String token) {
         public Session {
@@ -16,14 +16,26 @@ public interface AuthService {
         @Override public String toString() { return "Session[credentials redacted]"; }
     }
 
-    record Result(boolean success, String message, Session session) {
+    record Result(boolean success, String message, Session session, boolean invalidToken) {
+        public Result(boolean success, String message, Session session) {
+            this(success, message, session, false);
+        }
         public Result {
             if (success && session == null) throw new IllegalArgumentException("登录成功必须包含会话");
+            if (success && invalidToken) throw new IllegalArgumentException("无效 Token 不能登录");
         }
         @Override public String toString() { return "Result[success=" + success + "]"; }
     }
 
-    record CodeResult(boolean success, String message) {}
+    record CodeResult(boolean success, String message, boolean invalidToken) {
+        public CodeResult(boolean success, String message) { this(success, message, false); }
+    }
+
+    default boolean requiresCaptcha() { return false; }
+
+    default CompletionStage<CodeResult> sendCode(String phone, String proof) {
+        return sendCode(phone);
+    }
 
     default CompletionStage<CodeResult> sendCode(String phone) {
         return CompletableFuture.completedFuture(new CodeResult(false, "短信接口尚未接入。"));

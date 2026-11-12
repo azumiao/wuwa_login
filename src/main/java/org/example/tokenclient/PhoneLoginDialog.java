@@ -16,14 +16,20 @@ final class PhoneLoginDialog extends Dialog<AuthService.Session> {
     private final Label feedback = new Label("获取验证码后，输入 6 位短信验证码。");
     private final Timeline cooldown = new Timeline();
     private final AuthService auth;
+    private final CaptchaProvider captcha;
     private final String phone;
     private int remaining;
     private long generation;
     private boolean busy;
 
     PhoneLoginDialog(Window owner, String phone, AuthService auth, boolean demo) {
+        this(owner, phone, auth, demo, new GeetestCaptcha());
+    }
+
+    PhoneLoginDialog(Window owner, String phone, AuthService auth, boolean demo, CaptchaProvider captcha) {
         this.phone = phone;
         this.auth = auth;
+        this.captcha = captcha;
         if (owner != null) initOwner(owner);
         setTitle("手机号登录");
         setResultConverter(button -> null);
@@ -60,15 +66,36 @@ final class PhoneLoginDialog extends Dialog<AuthService.Session> {
         getDialogPane().setContent(content);
         send.setOnAction(event -> sendCode());
         verify.setOnAction(event -> login());
-        setOnHiding(event -> { generation++; cooldown.stop(); code.clear(); });
+        if (auth.requiresCaptcha()) setOnShown(event -> sendCode());
+        setOnHiding(event -> { generation++; cooldown.stop(); captcha.cancel(); code.clear(); });
     }
 
     private void sendCode() {
         if (busy || remaining > 0) return;
         busy(true);
         long request = generation;
+        feedback.setText(auth.requiresCaptcha() ? "请完成验证符号，通过后发送短信。" : "正在获取验证码…");
         try {
-            auth.sendCode(phone).whenComplete((result, error) -> Platform.runLater(() -> {
+            var proof = auth.requiresCaptcha() ? captcha.verify(getDialogPane().getScene().getWindow())
+                    : java.util.concurrent.CompletableFuture.completedFuture("");
+            proof.whenComplete((value, failure) -> onFx(() -> {
+                if (request != generation || !isShowing()) return;
+                if (failure != null || value == null) {
+                    busy(false);
+                    feedback.setText("已取消或未完成人机验证，可重新获取验证码。");
+                    return;
+                }
+                sendVerified(request, value);
+            }));
+        } catch (RuntimeException error) {
+            busy(false);
+            feedback.setText("短信服务暂不可用，请稍后重试。");
+        }
+    }
+
+    private void sendVerified(long request, String proof) {
+        try {
+            auth.sendCode(phone, proof).whenComplete((result, error) -> Platform.runLater(() -> {
                 if (request != generation || !isShowing()) return;
                 busy(false);
                 if (error != null || result == null) {
@@ -82,6 +109,11 @@ final class PhoneLoginDialog extends Dialog<AuthService.Session> {
             busy(false);
             feedback.setText("短信服务暂不可用，请稍后重试。");
         }
+    }
+
+    private static void onFx(Runnable action) {
+        if (Platform.isFxApplicationThread()) action.run();
+        else Platform.runLater(action);
     }
 
     private void startCooldown() {

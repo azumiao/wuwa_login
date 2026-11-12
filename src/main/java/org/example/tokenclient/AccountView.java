@@ -15,6 +15,11 @@ public final class AccountView extends BorderPane {
     private final AuthService auth;
     private final boolean demo;
     private final Consumer<String> copyToken;
+    private CredentialStore credentials = CredentialStore.NONE;
+    private CaptchaProvider captcha = new GeetestCaptcha();
+    private final Button retrySaved = new Button("重试本地登录");
+    private final Button clearSaved = new Button("清除本地登录");
+    private ScanLoginDialog scanDialog;
     private final TextField phone = new TextField();
     private final PasswordField hiddenToken = new PasswordField();
     private final TextField visibleToken = new TextField();
@@ -34,6 +39,7 @@ public final class AccountView extends BorderPane {
     private Dialog<Void> tokenDialog;
     private boolean busy;
     private boolean monitoring;
+    private boolean credentialsSaved;
     private long generation;
 
     public AccountView(AuthService auth, boolean demo) {
@@ -46,10 +52,29 @@ public final class AccountView extends BorderPane {
         });
     }
 
+    AccountView(AuthService auth, CredentialStore credentials) {
+        this(auth, false);
+        this.credentials = credentials;
+    }
+
+    AccountView(AuthService auth, CredentialStore credentials, CaptchaProvider captcha, Consumer<String> copyToken) {
+        this(auth, false, copyToken);
+        this.credentials = credentials;
+        this.captcha = captcha;
+    }
+
     AccountView(AuthService auth, boolean demo, Consumer<String> copyToken) {
         this.auth = Objects.requireNonNull(auth);
         this.demo = demo;
         this.copyToken = Objects.requireNonNull(copyToken);
+        retrySaved.setId("retry-saved");
+        retrySaved.setOnAction(event -> restoreSession());
+        clearSaved.setId("clear-saved");
+        clearSaved.setOnAction(event -> {
+            generation++;
+            setBusy(false);
+            if (clearCredentials()) message("本地登录已清除。", false);
+        });
         getStylesheets().add(Objects.requireNonNull(getClass().getResource("account.css")).toExternalForm());
         getStyleClass().add("app");
         setLeft(sidebar());
@@ -143,7 +168,11 @@ public final class AccountView extends BorderPane {
                         label("使用验证码登录，或直接使用已有 Token。", "muted")), spacer(), status),
                 new Separator(), new VBox(10, phoneLabel, phoneRow),
                 row(beforeToken, label("或使用 Token 登录", "muted"), afterToken),
-                new VBox(10, tokenLabel, row(tokenInput, reveal, tokenLogin)), feedback);
+                new VBox(10, tokenLabel, row(tokenInput, reveal, tokenLogin)), row(retrySaved, clearSaved), feedback);
+        retrySaved.setVisible(false);
+        retrySaved.setManaged(false);
+        clearSaved.setVisible(false);
+        clearSaved.setManaged(false);
     }
 
     private void openPhoneLogin() {
@@ -154,7 +183,7 @@ public final class AccountView extends BorderPane {
             phone.requestFocus();
             return;
         }
-        PhoneLoginDialog dialog = new PhoneLoginDialog(getScene() == null ? null : getScene().getWindow(), number, auth, demo);
+        PhoneLoginDialog dialog = new PhoneLoginDialog(getScene() == null ? null : getScene().getWindow(), number, auth, demo, captcha);
         phoneDialog = dialog;
         dialog.setOnHidden(event -> {
             phoneDialog = null;
@@ -174,6 +203,25 @@ public final class AccountView extends BorderPane {
             message("Token 中不能包含空格或换行，请检查后重试。", true);
             return;
         }
+        validateToken(token, false);
+    }
+
+    /** Called once after opening the window; cached data is never an authenticated session. */
+    public void restoreSession() {
+        if (demo || busy || session != null || phoneDialog != null) return;
+        try {
+            var saved = credentials.load();
+            if (saved.isPresent()) {
+                showSavedActions(true);
+                validateToken(saved.get().token(), true);
+            }
+        } catch (java.io.IOException error) {
+            showSavedActions(true);
+            message("本地登录信息无法读取，请清除后重新登录。", true);
+        }
+    }
+
+    private void validateToken(String token, boolean restoring) {
         setBusy(true);
         long request = ++generation;
         message("正在验证 Token…", false);
@@ -186,7 +234,10 @@ public final class AccountView extends BorderPane {
                 } else if (result.success()) {
                     enterSession(result.session());
                 } else {
-                    message(result.message(), true);
+                    if (restoring && result.invalidToken()) {
+                        boolean cleared = clearCredentials();
+                        if (cleared) message(result.message(), true);
+                    } else message(result.message(), true);
                 }
             }));
         } catch (RuntimeException error) {
@@ -229,10 +280,40 @@ public final class AccountView extends BorderPane {
         VBox details = new VBox(16, label("运行状态", "field-label"), monitorStatus,
                 new Separator(), label("识别耗时", "muted"), label("— ms", "metric"));
         details.setMinWidth(140);
+        Button scan = new Button("扫码登录游戏");
+        scan.setId("scan-login");
+        scan.getStyleClass().add("secondary");
+        scan.setDisable(!(auth instanceof ScanService));
+        scan.setOnAction(event -> openScan());
         card.getChildren().setAll(
                 row(badge("◎"), new VBox(5, label("当前账号", "muted"), accountName), spacer(), status, logout, getToken),
-                new Separator(), new VBox(10, roomLabel, roomRow), row(preview, details), feedback);
+                new Separator(), scan, new VBox(10, roomLabel, roomRow), row(preview, details), feedback);
         message(demo ? "已进入演示账号，可获取 Token 或预览监视交互。" : "登录成功，请输入直播间账号。", false);
+        if (!demo) {
+            credentialsSaved = false;
+            try { credentials.save(value); credentialsSaved = true; }
+            catch (java.io.IOException error) { message("登录成功，但本地保存失败；下次打开需重新登录。", true); }
+        }
+    }
+
+    private void openScan() {
+        if (session == null || scanDialog != null || !(auth instanceof ScanService scanner)) return;
+        ScanLoginDialog dialog = new ScanLoginDialog(getScene().getWindow(), session, scanner, captcha, () -> {
+            logout();
+            message("Token 已失效，请重新登录。", true);
+        });
+        scanDialog = dialog;
+        dialog.setOnHidden(event -> scanDialog = null);
+        dialog.show();
+    }
+
+    private void showSavedActions(boolean show) {
+        for (Button button : new Button[]{retrySaved, clearSaved}) { button.setVisible(show); button.setManaged(show); }
+    }
+
+    private boolean clearCredentials() {
+        try { credentials.clear(); showSavedActions(false); return true; }
+        catch (java.io.IOException error) { showSavedActions(true); message("无法清除本地登录文件，请检查文件权限。", true); return false; }
     }
 
     private void openToken() {
@@ -273,7 +354,9 @@ public final class AccountView extends BorderPane {
         Button copy = new Button("复制 Token");
         copy.setId("copy-token");
         copy.getStyleClass().add("primary");
-        Label tip = label("Token 仅保留在内存中，退出登录后清除。请勿分享给他人。", "muted");
+        Label tip = label(demo ? "演示 Token 仅保留在内存中。" : credentialsSaved
+                ? "Token 已保存在本地，退出登录后清除。请勿分享给他人。"
+                : "Token 未能保存到本地，请勿分享给他人。", "muted");
         tip.setId("copy-feedback");
         tip.setWrapText(true);
         copy.setOnAction(event -> {
@@ -300,7 +383,7 @@ public final class AccountView extends BorderPane {
             return;
         }
         if (!demo) {
-            message("直播流获取与扫码功能将在后续阶段接入。", true);
+            message("直播流获取将在后续阶段接入，可使用上方按钮手动扫码登录游戏。", true);
             return;
         }
         monitoring = !monitoring;
@@ -325,13 +408,17 @@ public final class AccountView extends BorderPane {
         accountName.setText("");
         showLogin();
         message("已退出登录，当前会话已清除。", false);
+        if (!demo) clearCredentials();
     }
 
     public void dispose() {
         generation++;
         if (phoneDialog != null) phoneDialog.close();
         if (tokenDialog != null) tokenDialog.close();
+        if (scanDialog != null) scanDialog.close();
+        captcha.cancel();
         session = null;
+        credentialsSaved = false;
         hiddenToken.clear();
         phone.clear();
         setBusy(false);
@@ -340,7 +427,7 @@ public final class AccountView extends BorderPane {
 
     private void setBusy(boolean value) {
         busy = value;
-        for (Control control : new Control[]{phone, phoneLogin, hiddenToken, visibleToken, reveal, tokenLogin}) {
+        for (Control control : new Control[]{phone, phoneLogin, hiddenToken, visibleToken, reveal, tokenLogin, retrySaved, clearSaved}) {
             control.setDisable(value);
         }
         tokenLogin.setText(value ? "验证中…" : "Token 登录");

@@ -273,6 +273,202 @@ class AccountViewTest {
         });
     }
 
+    @Test void savedTokenIsCheckedBeforeLoginAndClosingPreservesIt() throws Exception {
+        MemoryCredentials store = new MemoryCredentials();
+        store.saved = new AuthService.Session("cached-account", "saved-token");
+        CompletableFuture<AuthService.Result> check = new CompletableFuture<>();
+        AccountView view = fx(() -> {
+            AccountView current = persistentView(new AuthService() {
+                @Override public CompletionStage<Result> loginWithToken(String token) {
+                    assertEquals("saved-token", token);
+                    return check;
+                }
+            }, store, owner -> CompletableFuture.completedFuture(null));
+            current.restoreSession();
+            assertEquals("●  未登录", label(current, "login-status").getText());
+            assertTrue(button(current, "phone-login").isDisabled());
+            assertNull(current.lookup("#get-token"));
+            return current;
+        });
+        check.complete(new AuthService.Result(true, "成功", new AuthService.Session("server-account", "saved-token")));
+        fx(() -> {
+            assertEquals("server-account", label(view, "current-account").getText());
+            assertEquals("●  已登录", label(view, "login-status").getText());
+            assertEquals("server-account", store.saved.account());
+            view.dispose();
+            assertNotNull(store.saved);
+            return null;
+        });
+    }
+
+    @Test void failedRestoreCanRetryAndOnlyConfirmedInvalidTokenIsDeleted() throws Exception {
+        MemoryCredentials store = new MemoryCredentials();
+        store.saved = new AuthService.Session("账号", "saved-token");
+        AtomicInteger calls = new AtomicInteger();
+        AccountView view = fx(() -> {
+            AccountView current = persistentView(new AuthService() {
+                @Override public CompletionStage<Result> loginWithToken(String token) {
+                    return CompletableFuture.completedFuture(calls.incrementAndGet() == 1
+                            ? new Result(false, "网络不可用", null) : new Result(false, "Token 已失效", null, true));
+                }
+            }, store, owner -> CompletableFuture.completedFuture(null));
+            current.restoreSession();
+            return current;
+        });
+        fx(() -> {
+            assertNotNull(store.saved);
+            assertEquals("●  未登录", label(view, "login-status").getText());
+            assertTrue(button(view, "retry-saved").isVisible());
+            button(view, "retry-saved").fire();
+            return null;
+        });
+        fx(() -> {
+            assertNull(store.saved);
+            assertFalse(button(view, "retry-saved").isVisible());
+            assertTrue(label(view, "feedback").getText().contains("失效"));
+            return null;
+        });
+    }
+
+    @Test void phoneWaitsForHumanVerificationThenPersistsAndLogoutDeletesSession() throws Exception {
+        MemoryCredentials store = new MemoryCredentials();
+        CompletableFuture<String> proof = new CompletableFuture<>();
+        AtomicInteger sends = new AtomicInteger();
+        AuthService service = new AuthService() {
+            @Override public boolean requiresCaptcha() { return true; }
+            @Override public CompletionStage<CodeResult> sendCode(String phone, String value) {
+                assertEquals(KuroAuthServiceTest.PROOF, value);
+                sends.incrementAndGet();
+                return CompletableFuture.completedFuture(new CodeResult(true, "已发送"));
+            }
+            @Override public CompletionStage<Result> loginWithPhone(String phone, String code) {
+                return CompletableFuture.completedFuture(new Result(true, "成功", new Session(phone, "phone-token")));
+            }
+        };
+        AccountView view = fx(() -> {
+            AccountView current = persistentView(service, store, owner -> proof);
+            field(current, "phone-input").setText("13812345678");
+            button(current, "phone-login").fire();
+            assertEquals(0, sends.get());
+            assertTrue(button(dialog("phone-dialog"), "send-code").isDisabled());
+            return current;
+        });
+        proof.complete(KuroAuthServiceTest.PROOF);
+        fx(() -> null);
+        fx(() -> {
+            assertEquals(1, sends.get());
+            Parent phone = dialog("phone-dialog");
+            assertTrue(button(phone, "send-code").isDisabled());
+            field(phone, "sms-code").setText("123456");
+            button(phone, "verify-phone").fire();
+            return null;
+        });
+        fx(() -> {
+            assertEquals("phone-token", store.saved.token());
+            button(view, "logout-button").fire();
+            assertNull(store.saved);
+            return null;
+        });
+    }
+
+    @Test void closingPhoneDialogWhileCaptchaPendingNeverSendsSms() throws Exception {
+        CompletableFuture<String> proof = new CompletableFuture<>();
+        AtomicInteger sends = new AtomicInteger();
+        fx(() -> {
+            AccountView view = persistentView(new AuthService() {
+                @Override public boolean requiresCaptcha() { return true; }
+                @Override public CompletionStage<CodeResult> sendCode(String phone, String value) {
+                    sends.incrementAndGet();
+                    return CompletableFuture.completedFuture(new CodeResult(true, "已发送"));
+                }
+            }, new MemoryCredentials(), owner -> proof);
+            field(view, "phone-input").setText("13812345678");
+            button(view, "phone-login").fire();
+            close(dialog("phone-dialog"));
+            return null;
+        });
+        proof.complete(KuroAuthServiceTest.PROOF);
+        fx(() -> { assertEquals(0, sends.get()); return null; });
+    }
+
+    @Test void scanSmsContinuationUsesOriginalQrAndRoleAndCannotSubmitTwice() throws Exception {
+        List<String> submissions = new ArrayList<>();
+        ScanService service = new ScanService() {
+            @Override public CompletionStage<ScanResult> roles(AuthService.Session session, String qr) {
+                return CompletableFuture.completedFuture(new ScanResult(Status.SUCCESS, "选择角色", List.of(new Role("role-1", "漂泊者"))));
+            }
+            @Override public CompletionStage<ScanResult> scan(AuthService.Session session, String qr, String id, String code) {
+                assertEquals(KuroAuthServiceTest.QR, qr);
+                assertEquals("role-1", id);
+                submissions.add(code);
+                return CompletableFuture.completedFuture(new ScanResult(code.isEmpty() ? Status.SMS_REQUIRED : Status.SUCCESS, code.isEmpty() ? "需要短信" : "登录成功"));
+            }
+            @Override public CompletionStage<AuthService.CodeResult> sendScanCode(AuthService.Session session, String proof) {
+                assertEquals(KuroAuthServiceTest.PROOF, proof);
+                return CompletableFuture.completedFuture(new AuthService.CodeResult(true, "已发送"));
+            }
+        };
+        fx(() -> {
+            var dialog = new ScanLoginDialog(null, new AuthService.Session("账号", "token"), service,
+                    owner -> CompletableFuture.completedFuture(KuroAuthServiceTest.PROOF), () -> fail("Unexpected invalid token"));
+            dialog.show();
+            ((TextArea) dialog.getDialogPane().lookup("#qr-input")).setText(KuroAuthServiceTest.QR);
+            button(dialog.getDialogPane(), "read-qr").fire();
+            return null;
+        });
+        fx(() -> { button(dialog("scan-dialog"), "confirm-qr").fire(); button(dialog("scan-dialog"), "confirm-qr").fire(); return null; });
+        fx(() -> {
+            Parent dialog = dialog("scan-dialog");
+            assertTrue(field(dialog, "scan-code").isVisible());
+            snapshot(dialog, "scan-sms");
+            button(dialog, "send-scan-code").fire();
+            return null;
+        });
+        fx(() -> null);
+        fx(() -> {
+            Parent dialog = dialog("scan-dialog");
+            assertTrue(button(dialog, "send-scan-code").isDisabled());
+            field(dialog, "scan-code").setText("123456");
+            button(dialog, "confirm-qr").fire();
+            return null;
+        });
+        fx(() -> {
+            assertEquals(List.of("", "123456"), submissions);
+            assertTrue(button(dialog("scan-dialog"), "confirm-qr").isDisabled());
+            close(dialog("scan-dialog"));
+            return null;
+        });
+    }
+
+    static final class MemoryCredentials implements CredentialStore {
+        AuthService.Session saved;
+        public java.util.Optional<AuthService.Session> load() { return java.util.Optional.ofNullable(saved); }
+        public void save(AuthService.Session session) { saved = session; }
+        public void clear() { saved = null; }
+    }
+
+    @Test void officialCaptchaWindowCanOpenAndCancel() throws Exception {
+        AtomicReference<CompletionStage<String>> result = new AtomicReference<>();
+        fx(() -> {
+            GeetestCaptcha captcha = new GeetestCaptcha();
+            result.set(captcha.verify(null));
+            captcha.cancel();
+            return null;
+        });
+        assertNull(result.get().toCompletableFuture().get(5, TimeUnit.SECONDS));
+    }
+
+    private AccountView persistentView(AuthService service, CredentialStore store, CaptchaProvider captcha) {
+        AccountView view = new AccountView(service, store, captcha, token -> {});
+        views.add(view);
+        Stage stage = new Stage();
+        stage.setScene(new Scene(view, 1100, 800));
+        stage.show();
+        view.applyCss();
+        view.layout();
+        return view;
+    }
+
     private AccountView view(AuthService auth, boolean demo, java.util.function.Consumer<String> copy) {
         AccountView view = new AccountView(auth, demo, copy);
         views.add(view);
