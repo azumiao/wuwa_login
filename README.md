@@ -9,8 +9,10 @@ JDK 25 + JavaFX 21，全程Ai开发
 ```bash
 mvn javafx:run
 ```
-
 IntelliJ IDEA 中重新加载 Maven 项目，也可运行 `org.example.Main`。
+
+## 下载
+[下载 macOS 版](https://github.com/azumiao/wuwa_login/releases/download/1.0/WuwaLogin1.0.app.zip)
 
 ## 手机号与 Token 登录
 
