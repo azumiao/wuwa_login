@@ -135,6 +135,9 @@ public final class AccountView extends BorderPane {
         monitor.setOnAction(event -> toggleMonitor());
         room.setOnAction(event -> monitor.fire());
         monitorStatus.setId("monitor-status");
+        monitorStatus.setWrapText(true);
+        monitorStatus.setMinWidth(0);
+        monitorStatus.setMaxWidth(Double.MAX_VALUE);
         monitorStatus.getStyleClass().add("status");
         accountName.setId("current-account");
         accountName.getStyleClass().add("account-name");
@@ -288,11 +291,14 @@ public final class AccountView extends BorderPane {
         preview.setId("stream-preview");
         preview.getStyleClass().add("preview");
         preview.setMinHeight(220);
+        preview.setMinWidth(180);
         preview.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(preview, Priority.ALWAYS);
         VBox details = new VBox(16, label("运行状态", "field-label"), monitorStatus,
                 new Separator(), label("识别耗时", "muted"), scanMetrics);
-        details.setMinWidth(140);
+        details.setMinWidth(240);
+        details.setPrefWidth(300);
+        details.setMaxWidth(320);
         Button scan = new Button("扫码登录游戏");
         scan.setId("scan-login");
         scan.getStyleClass().add("secondary");

@@ -140,7 +140,7 @@ class LiveScanServiceTest {
             assertTrue(status.contains("二维码识别初始化失败"));
             assertTrue(status.contains("NoClassDefFoundError"));
             assertTrue(status.contains("UnsatisfiedLinkError"));
-            assertTrue(status.contains("原生库加载失败"));
+            assertTrue(status.contains("原生库或其依赖加载失败"));
         }
     }
 
@@ -166,6 +166,21 @@ class LiveScanServiceTest {
             assertFalse(diagnostic.contains(secret));
         assertTrue(diagnostic.contains("IllegalStateException"));
         assertTrue(diagnostic.length() < 2500);
+    }
+
+    @Test void nativeDiagnosticsPreserveDyldReasonAfterLongCachePaths() {
+        String path = "/Users/test/.javacpp/cache/" + "long-directory/".repeat(250);
+        String raw = path + "libjniopencv_wechat_qrcode.dylib: dlopen(" + path + "), 0x0001):"
+                + "\nLibrary not loaded: @rpath/libopencv_objdetect.410.dylib"
+                + "\nReferenced from: " + path + "libopencv_wechat_qrcode.410.dylib"
+                + "\nReason: tried: " + path + " (no such file)"
+                + "\nhttps://cdn.example/live.flv?sign=secret-sign";
+        String diagnostic = ScanFailure.diagnostic(new UnsatisfiedLinkError(raw));
+        assertTrue(diagnostic.contains("\n  Library not loaded: @rpath/libopencv_objdetect.410.dylib"));
+        assertTrue(diagnostic.contains("\n  Reason: tried:"));
+        assertTrue(diagnostic.contains("no such file"));
+        assertFalse(diagnostic.contains("secret-sign"));
+        assertTrue(diagnostic.length() < 3500);
     }
     private static void await(java.util.function.BooleanSupplier check) throws InterruptedException {
         long end = System.nanoTime()+TimeUnit.SECONDS.toNanos(3);

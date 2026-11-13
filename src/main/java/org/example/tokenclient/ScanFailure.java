@@ -12,11 +12,10 @@ final class ScanFailure {
 
     static String message(Phase phase, Throwable error) {
         List<Throwable> causes = causes(error);
-        String types = String.join(" → ", causes.stream().map(e -> e.getClass().getSimpleName()).toList());
+        String types = String.join(" → ", causes.stream().map(e -> e.getClass().getSimpleName()).distinct().toList());
         String result = phase.label + "失败（" + phase.name() + "；" + types + "）";
         if (causes.stream().anyMatch(e -> e instanceof LinkageError))
-            return result + "：原生库加载失败。请重新加载 Maven，确认 JDK 与原生依赖架构一致（"
-                    + platform() + "）。";
+            return result + "：原生库或其依赖加载失败（" + platform() + "）。请查看控制台的 Library not loaded / Reason。";
         if (phase == Phase.QR_INIT && causes.stream().anyMatch(e -> e instanceof java.io.IOException))
             return result + "：模型或临时目录读取失败，请检查安装文件及目录权限。";
         return result + "，请查看控制台诊断后重试。";
@@ -29,14 +28,28 @@ final class ScanFailure {
             String raw = cause.getMessage();
             if (raw != null) {
                 // Native errors can contain signed stream URLs; never log them verbatim.
-                raw = raw.substring(0, Math.min(raw.length(), 2048))
-                        .replaceAll("(?i)https?://[^\\s\"'<>]+", "[直播地址已隐藏]")
+                raw = raw.replaceAll("(?i)https?://[^\\s\"'<>]+", "[直播地址已隐藏]")
                         .replaceAll("(?i)(token|did|devCode|a_bogus|msToken|sign|signature|ticket|cookie)[=:]\\s*[^\\s,;]+", "$1=[已隐藏]");
-                result.append(": ").append(ApiFeedback.message(raw, List.of()));
+                result.append(": ").append(detail(ApiFeedback.redacted(raw, List.of())));
             }
             StackTraceElement[] stack = cause.getStackTrace();
             for (int i = 0; i < Math.min(stack.length, 6); i++) result.append("\n  at ").append(stack[i]);
         }
+        return result.toString();
+    }
+
+    private static String detail(String text) {
+        StringBuilder result = new StringBuilder();
+        // Long cache paths may precede the actual dyld failure. Preserve that reason before
+        // shortening paths, and put it on its own line so it is visible in IDE consoles.
+        String lower = text.toLowerCase(Locale.ROOT);
+        for (String marker : List.of("library not loaded:", "symbol not found:", "reason:", "code signature", "incompatible architecture")) {
+            int at = lower.indexOf(marker);
+            if (at >= 0) result.append("\n  ").append(text, at, Math.min(text.length(), at + 400));
+        }
+        result.append("\n  ");
+        if (text.length() <= 1200) result.append(text);
+        else result.append(text, 0, 400).append(" …[长路径已省略]… ").append(text, text.length() - 800, text.length());
         return result.toString();
     }
 

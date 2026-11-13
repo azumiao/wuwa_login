@@ -14,6 +14,7 @@ final class WechatQrDecoder implements LiveScanService.Decoder {
     private static Path models;
     private final WeChatQRCode detector;
     WechatQrDecoder() throws IOException {
+        WechatNativeLoader.load();
         Path directory = models();
         detector = new WeChatQRCode(directory.resolve("detect.prototxt").toString(), directory.resolve("detect.caffemodel").toString(),
                 directory.resolve("sr.prototxt").toString(), directory.resolve("sr.caffemodel").toString());

@@ -5,6 +5,11 @@ import java.util.Collection;
 
 final class ApiFeedback {
     static String message(String raw, Collection<String> credentials) {
+        String value = redacted(raw, credentials);
+        return value.length() > 180 ? value.substring(0, 180) + "…" : value;
+    }
+
+    static String redacted(String raw, Collection<String> credentials) {
         String value = raw;
         for (String credential : credentials) {
             if (credential != null && !credential.isEmpty()) {
@@ -16,7 +21,7 @@ final class ApiFeedback {
                 .replaceAll("(?<![0-9])1[3-9][0-9]{9}(?![0-9])", "[手机号已隐藏]")
                 .replaceAll("(?i)G[0-9]+#KURO[^\\s，,;；]*", "[二维码已隐藏]")
                 .replaceAll("[\\p{Cntrl}\\s]+", " ").strip();
-        return value.length() > 180 ? value.substring(0, 180) + "…" : value;
+        return value;
     }
 
     static String failure(String operation, JsonNode response) {

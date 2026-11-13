@@ -60,6 +60,10 @@ Next/Flight 长字符串通过逐字符扫描引号和转义字符解析，避�
 
 视频由 JavaCV/FFmpeg 持续解码，二维码直接使用 **OpenCV WeChatQRCode**。图片扫码也使用同一个识别实现；ZXing 仅作为测试二维码生成器。四个模型随应用打包，加载时验证 SHA-256，首次扫码无需下载模型。
 
+创建 WeChat 识别器前先加载 DNN，再按 `flann → features2d → calib3d → objdetect → wechat_qrcode` 加载原生依赖。macOS 的 OpenCV 4.10 WeChat 二进制链接了这些模块，但对应 JavaCPP preset 只声明了 DNN；显式加载用于补齐该依赖缺口。直接加载底层库，不引入 OpenCV GUI 模块，不需要通过 Homebrew 安装另一套 OpenCV，也不需要手动修改 `java.library.path`。
+
+原生加载诊断会单独保留 `Library not loaded`、`Symbol not found`、`Reason` 等 dyld 原因，长缓存路径从中间缩短，不再使用界面短提示的 180 字符上限截断控制台日志。状态长文本自动换行，避免挤压预览区域。
+
 采集与识别各有独立线程，只保留一张待识别最新帧。跨线程传递独立的 BGR 字节，不引用 FFmpeg 复用内存。识别前、识别后及界面接收时检查帧龄；默认本机帧龄上限 500ms，可通过 JVM 参数 `-Dapp.scan.maxAgeMs=500` 调整（50～5000ms）。开始、停止、重连与 PTS 回退会隔离旧结果。读取有 5 秒网络 I/O 超时，停止不会等待网络或原生识别而阻塞界面；工作线程在阻塞操作返回后自行释放资源。
 
 连接异常后最多重试三次，每次重新解析房间地址。未开播立即停止并提示。媒体 PTS 相对单调时钟落后增长超过 2.5 秒时重新连接。该指标只能反映连接后的延迟增长，**本机帧龄和 PTS 均不能证明主播到 CDN 的绝对延迟**。
