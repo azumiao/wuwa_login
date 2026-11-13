@@ -28,4 +28,4 @@ IntelliJ IDEA 中重新加载 Maven 项目，也可运行 `org.example.Main`。
 ## 感谢
 
 - [mxyooR/Kuro_login](https://github.com/mxyooR/Kuro_login)
-- [DSVVA/KuRo_Scanner(https://github.com/DSVVA/KuRo_Scanner/blob/main/src/Core/KuRoApi.cpp)
+- [DSVVA/KuRo_Scanner](https://github.com/DSVVA/KuRo_Scanner)
