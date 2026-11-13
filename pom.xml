@@ -12,6 +12,7 @@
         <app.demo>false</app.demo>
         <app.scan.decoderThreads>2</app.scan.decoderThreads>
         <javacpp.platform>linux-x86_64</javacpp.platform>
+        <jpackage.executable.suffix></jpackage.executable.suffix>
     </properties>
     <dependencies>
         <dependency>
@@ -50,10 +51,73 @@
         <dependency><groupId>org.bytedeco</groupId><artifactId>ffmpeg</artifactId><version>7.1-1.5.11</version><classifier>${javacpp.platform}</classifier></dependency>
     </dependencies>
     <profiles>
-        <profile><id>windows</id><activation><os><family>Windows</family><arch>amd64</arch></os></activation><properties><javacpp.platform>windows-x86_64</javacpp.platform></properties></profile>
+        <profile><id>windows</id><activation><os><family>Windows</family><arch>amd64</arch></os></activation><properties><javacpp.platform>windows-x86_64</javacpp.platform><jpackage.executable.suffix>.exe</jpackage.executable.suffix></properties></profile>
         <profile><id>mac-arm</id><activation><os><family>mac</family><arch>aarch64</arch></os></activation><properties><javacpp.platform>macosx-arm64</javacpp.platform></properties></profile>
         <profile><id>mac-intel</id><activation><os><family>mac</family><arch>x86_64</arch></os></activation><properties><javacpp.platform>macosx-x86_64</javacpp.platform></properties></profile>
         <profile><id>linux-arm</id><activation><os><name>Linux</name><arch>aarch64</arch></os></activation><properties><javacpp.platform>linux-arm64</javacpp.platform></properties></profile>
+        <profile>
+            <id>app</id>
+            <build>
+                <finalName>wuwa-login</finalName>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-jar-plugin</artifactId><version>3.4.2</version>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/package-input</outputDirectory>
+                            <archive>
+                                <manifest>
+                                    <mainClass>org.example.Main</mainClass>
+                                    <addClasspath>true</addClasspath>
+                                    <classpathPrefix>lib/</classpathPrefix>
+                                </manifest>
+                            </archive>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-dependency-plugin</artifactId><version>3.8.1</version>
+                        <executions>
+                            <execution>
+                                <id>copy-app-dependencies</id>
+                                <phase>prepare-package</phase>
+                                <goals><goal>copy-dependencies</goal></goals>
+                                <configuration>
+                                    <includeScope>runtime</includeScope>
+                                    <outputDirectory>${project.build.directory}/package-input/lib</outputDirectory>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId><artifactId>exec-maven-plugin</artifactId><version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>package-desktop-app</id>
+                                <phase>package</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>${java.home}/bin/jpackage${jpackage.executable.suffix}</executable>
+                                    <arguments>
+                                        <argument>--type</argument><argument>app-image</argument>
+                                        <argument>--name</argument><argument>WuwaLogin</argument>
+                                        <argument>--app-version</argument><argument>1.0.0</argument>
+                                        <argument>--vendor</argument><argument>azumiao</argument>
+                                        <argument>--input</argument><argument>${project.build.directory}/package-input</argument>
+                                        <argument>--dest</argument><argument>${project.build.directory}/dist</argument>
+                                        <argument>--main-jar</argument><argument>wuwa-login.jar</argument>
+                                        <argument>--main-class</argument><argument>org.example.Main</argument>
+                                        <!-- Include JDK modules used through reflection by JavaFX/JavaCV. -->
+                                        <argument>--add-modules</argument><argument>ALL-MODULE-PATH</argument>
+                                        <argument>--java-options</argument><argument>--enable-native-access=ALL-UNNAMED</argument>
+                                        <argument>--java-options</argument><argument>-Dapp.demo=${app.demo}</argument>
+                                        <argument>--java-options</argument><argument>-Dapp.scan.decoderThreads=${app.scan.decoderThreads}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
     <build>
         <resources>
