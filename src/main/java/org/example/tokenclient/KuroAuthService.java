@@ -188,7 +188,7 @@ public final class KuroAuthService implements AuthService, ScanService {
 
     static boolean validQr(String qr) {
         return qr != null && qr.length() >= 24 && qr.length() <= 4096 && qr.toUpperCase(Locale.ROOT).contains("KURO")
-                && qr.chars().noneMatch(Character::isWhitespace);
+                && qr.chars().noneMatch(c -> Character.isWhitespace(c) || Character.isISOControl(c));
     }
     private static String encode(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }
     private static boolean ok(JsonNode data) { return data.path("code").asInt(-1) == 200 && data.path("success").asBoolean(true); }

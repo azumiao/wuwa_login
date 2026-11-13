@@ -1,8 +1,5 @@
 package org.example.tokenclient;
 
-import com.google.zxing.*;
-import com.google.zxing.client.j2se.BufferedImageLuminanceSource;
-import com.google.zxing.common.HybridBinarizer;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import javax.imageio.ImageIO;
@@ -15,7 +12,7 @@ import javafx.stage.FileChooser;
 import javafx.stage.Window;
 import javafx.util.Duration;
 
-/** Manual QR entry; future stream recognition can feed the same ScanService boundary. */
+/** Shared confirmation flow for manual images, text and live-stream recognition. */
 final class ScanLoginDialog extends Dialog<Void> {
     private final AuthService.Session session;
     private final ScanService service;
@@ -42,6 +39,9 @@ final class ScanLoginDialog extends Dialog<Void> {
     private boolean resizeScheduled;
     private int remaining;
     private long generation;
+    private Consumer<String> terminalCode = ignored -> { };
+
+    void setOnTerminalCode(Consumer<String> callback) { terminalCode = callback; }
 
     ScanLoginDialog(Window owner, AuthService.Session session, ScanService service, CaptchaProvider captcha, Runnable invalidToken) {
         this.session = session;
@@ -149,6 +149,7 @@ final class ScanLoginDialog extends Dialog<Void> {
             } else if (result.status() == ScanService.Status.SUCCESS) {
                 code.clear();
                 completed = true;
+                terminalCode.accept(payload);
             }
         });
     }
@@ -156,7 +157,7 @@ final class ScanLoginDialog extends Dialog<Void> {
     private boolean handle(ScanService.ScanResult result) {
         feedback.setText(result.message());
         if (result.status() == ScanService.Status.INVALID_TOKEN) { close(); invalidToken.run(); return true; }
-        if (result.status() == ScanService.Status.EXPIRED) { reset(); return true; }
+        if (result.status() == ScanService.Status.EXPIRED) { terminalCode.accept(qr.getText().strip()); reset(); return true; }
         return false;
     }
 
@@ -232,7 +233,10 @@ final class ScanLoginDialog extends Dialog<Void> {
                 if (java.nio.file.Files.size(file) > 20_000_000) throw new IllegalArgumentException();
                 var picture = ImageIO.read(file.toFile());
                 if (picture == null) throw new IllegalArgumentException();
-                return new MultiFormatReader().decode(new BinaryBitmap(new HybridBinarizer(new BufferedImageLuminanceSource(picture)))).getText();
+                try (var decoder = new WechatQrDecoder()) {
+                    return decoder.decode(VideoFrame.fromImage(picture)).stream()
+                            .filter(KuroAuthService::validQr).findFirst().orElseThrow();
+                }
             } catch (Exception error) { throw new CompletionException(new IllegalArgumentException("无法读取二维码")); }
         }).whenComplete((value, error) -> Platform.runLater(() -> {
             if (request != generation || !isShowing()) return;
@@ -244,6 +248,13 @@ final class ScanLoginDialog extends Dialog<Void> {
             }
             update();
         }));
+    }
+
+    void acceptLiveCode(String value) {
+        if (busy || scanReady || !isShowing()) return;
+        qr.setText(value);
+        autoRead.stop();
+        loadRoles();
     }
 
     private void update() {

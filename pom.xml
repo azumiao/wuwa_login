@@ -10,6 +10,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javafx.version>21.0.6</javafx.version>
         <app.demo>false</app.demo>
+        <javacpp.platform>linux-x86_64</javacpp.platform>
     </properties>
     <dependencies>
         <dependency>
@@ -19,7 +20,7 @@
             <groupId>org.openjfx</groupId><artifactId>javafx-web</artifactId><version>${javafx.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.google.zxing</groupId><artifactId>javase</artifactId><version>3.5.3</version>
+            <groupId>com.google.zxing</groupId><artifactId>javase</artifactId><version>3.5.3</version><scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.openjfx</groupId><artifactId>javafx-controls</artifactId><version>${javafx.version}</version>
@@ -33,8 +34,31 @@
         <dependency>
             <groupId>org.testfx</groupId><artifactId>openjfx-monocle</artifactId><version>21.0.2</version><scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.bytedeco</groupId><artifactId>javacv</artifactId><version>1.5.11</version>
+            <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+        </dependency>
+        <dependency><groupId>org.bouncycastle</groupId><artifactId>bcprov-jdk18on</artifactId><version>1.80</version></dependency>
+        <dependency><groupId>org.bytedeco</groupId><artifactId>javacpp</artifactId><version>1.5.11</version></dependency>
+        <dependency><groupId>org.bytedeco</groupId><artifactId>javacpp</artifactId><version>1.5.11</version><classifier>${javacpp.platform}</classifier></dependency>
+        <dependency><groupId>org.bytedeco</groupId><artifactId>openblas</artifactId><version>0.3.28-1.5.11</version></dependency>
+        <dependency><groupId>org.bytedeco</groupId><artifactId>openblas</artifactId><version>0.3.28-1.5.11</version><classifier>${javacpp.platform}</classifier></dependency>
+        <dependency><groupId>org.bytedeco</groupId><artifactId>opencv</artifactId><version>4.10.0-1.5.11</version></dependency>
+        <dependency><groupId>org.bytedeco</groupId><artifactId>opencv</artifactId><version>4.10.0-1.5.11</version><classifier>${javacpp.platform}</classifier></dependency>
+        <dependency><groupId>org.bytedeco</groupId><artifactId>ffmpeg</artifactId><version>7.1-1.5.11</version></dependency>
+        <dependency><groupId>org.bytedeco</groupId><artifactId>ffmpeg</artifactId><version>7.1-1.5.11</version><classifier>${javacpp.platform}</classifier></dependency>
     </dependencies>
+    <profiles>
+        <profile><id>windows</id><activation><os><family>Windows</family><arch>amd64</arch></os></activation><properties><javacpp.platform>windows-x86_64</javacpp.platform></properties></profile>
+        <profile><id>mac-arm</id><activation><os><family>mac</family><arch>aarch64</arch></os></activation><properties><javacpp.platform>macosx-arm64</javacpp.platform></properties></profile>
+        <profile><id>mac-intel</id><activation><os><family>mac</family><arch>x86_64</arch></os></activation><properties><javacpp.platform>macosx-x86_64</javacpp.platform></properties></profile>
+        <profile><id>linux-arm</id><activation><os><name>Linux</name><arch>aarch64</arch></os></activation><properties><javacpp.platform>linux-arm64</javacpp.platform></properties></profile>
+    </profiles>
     <build>
+        <resources>
+            <resource><directory>src/main/resources</directory></resource>
+            <resource><directory>.</directory><targetPath>META-INF</targetPath><includes><include>THIRD_PARTY.md</include></includes></resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version>
@@ -45,12 +69,14 @@
                     <mainClass>org.example.Main</mainClass>
                     <options>
                         <option>-Dapp.demo=${app.demo}</option>
+                        <option>--enable-native-access=ALL-UNNAMED</option>
                     </options>
                 </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.2</version>
                 <configuration>
+                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
                     <systemPropertyVariables>
                         <glass.platform>Monocle</glass.platform>
                         <monocle.platform>Headless</monocle.platform>

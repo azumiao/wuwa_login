@@ -20,6 +20,12 @@ public final class AccountView extends BorderPane {
     private final Button retrySaved = new Button("重试本地登录");
     private final Button clearSaved = new Button("清除本地登录");
     private ScanLoginDialog scanDialog;
+    private LiveScanService liveScanner = new LiveScanService();
+    private final Label scanMetrics = new Label("—");
+    private final javafx.animation.Timeline scanPoll = new javafx.animation.Timeline(
+            new javafx.animation.KeyFrame(javafx.util.Duration.millis(250), event -> refreshScan()));
+    private long scanGeneration;
+
     private final TextField phone = new TextField();
     private final PasswordField hiddenToken = new PasswordField();
     private final TextField visibleToken = new TextField();
@@ -120,7 +126,10 @@ public final class AccountView extends BorderPane {
         hiddenToken.setOnAction(event -> tokenLogin.fire());
         visibleToken.setOnAction(event -> tokenLogin.fire());
         room.setId("room-input");
-        room.setPromptText("输入直播间账号 / 房间号");
+        room.setPromptText("抖音直播房间号 / live.douyin.com 链接");
+        scanMetrics.setId("scan-metrics");
+        scanMetrics.setWrapText(true);
+        scanPoll.setCycleCount(javafx.animation.Animation.INDEFINITE);
         monitor.setId("monitor-button");
         monitor.getStyleClass().add("primary");
         monitor.setOnAction(event -> toggleMonitor());
@@ -270,10 +279,10 @@ public final class AccountView extends BorderPane {
         getToken.setOnAction(event -> openToken());
         HBox roomRow = row(room, monitor);
         HBox.setHgrow(room, Priority.ALWAYS);
-        Label roomLabel = label("直播间账号", "field-label");
+        Label roomLabel = label("抖音直播房间号", "field-label");
         roomLabel.setLabelFor(room);
         VBox previewCopy = new VBox(14, label("▣", "preview-icon"), previewTitle,
-                label(demo ? "演示预览 · 暂无直播画面" : "开始监视后在这里显示直播画面", "muted"));
+                label(demo ? "演示预览 · 暂无直播画面" : "直播扫码独立运行 · 画面预览后续接入", "muted"));
         previewCopy.setAlignment(Pos.CENTER);
         StackPane preview = new StackPane(previewCopy);
         preview.setId("stream-preview");
@@ -282,7 +291,7 @@ public final class AccountView extends BorderPane {
         preview.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(preview, Priority.ALWAYS);
         VBox details = new VBox(16, label("运行状态", "field-label"), monitorStatus,
-                new Separator(), label("识别耗时", "muted"), label("— ms", "metric"));
+                new Separator(), label("识别耗时", "muted"), scanMetrics);
         details.setMinWidth(140);
         Button scan = new Button("扫码登录游戏");
         scan.setId("scan-login");
@@ -292,6 +301,7 @@ public final class AccountView extends BorderPane {
         card.getChildren().setAll(
                 row(badge("◎"), new VBox(5, label("当前账号", "muted"), accountName), spacer(), status, logout, getToken),
                 new Separator(), scan, new VBox(10, roomLabel, roomRow), row(preview, details), feedback);
+        if (!demo) monitor.setText("开始扫描");
         message(demo ? "已进入演示账号，可获取 Token 或预览监视交互。" : "登录成功，请输入直播间账号。", false);
         if (!demo) {
             credentialsSaved = false;
@@ -307,7 +317,9 @@ public final class AccountView extends BorderPane {
             message("Token 已失效，请重新登录。", true);
         });
         scanDialog = dialog;
-        dialog.setOnHidden(event -> scanDialog = null);
+        liveScanner.pause();
+        dialog.setOnTerminalCode(liveScanner::suppress);
+        dialog.setOnHidden(event -> { scanDialog = null; liveScanner.resume(); });
         dialog.show();
     }
 
@@ -403,7 +415,27 @@ public final class AccountView extends BorderPane {
             return;
         }
         if (!demo) {
-            message("直播流获取将在后续阶段接入，可使用上方按钮手动扫码登录游戏。", true);
+            if (monitoring) { stopLiveScan(); return; }
+            if (!(auth instanceof ScanService)) { message("当前账号服务不支持游戏扫码。", true); return; }
+            final String id;
+            try { id = DouyinStreamResolver.roomId(room.getText()); }
+            catch (IllegalArgumentException e) { message(e.getMessage(), true); return; }
+            long request = ++scanGeneration;
+            monitoring = true;
+            room.setDisable(true);
+            monitor.setText("停止扫描");
+            previewTitle.setText("直播扫码运行中");
+            liveScanner.start(id, candidate -> Platform.runLater(() -> {
+                if (request != scanGeneration || session == null) return;
+                if (scanDialog != null) return;
+                if (!liveScanner.accepts(candidate)) { liveScanner.resume(); return; }
+                openScan();
+                if (scanDialog != null) scanDialog.acceptLiveCode(candidate.text());
+                else liveScanner.resume();
+            }));
+            scanPoll.playFromStart();
+            message("正在连接抖音直播；识别后将显示二次确认登录。", false);
+            refreshScan();
             return;
         }
         monitoring = !monitoring;
@@ -415,6 +447,30 @@ public final class AccountView extends BorderPane {
         previewTitle.setText(monitoring ? "正在演示监视交互" : "等待直播画面");
         message(monitoring ? "当前为界面演示，尚未连接直播流。" : "已停止演示监视。", false);
     }
+
+    private void refreshScan() {
+        if (!monitoring || demo) return;
+        var stats = liveScanner.stats();
+        monitorStatus.setText(stats.status());
+        scanMetrics.setText("识别 " + stats.decodeMs() + " ms · 帧龄 " + stats.ageMs() + " ms\n已读取 "
+                + stats.frames() + " 帧 · 已识别 " + stats.scanned() + " 帧\n覆盖旧帧 " + stats.dropped()
+                + " · 过旧丢弃 " + stats.stale() + "\n流延迟增长 " + stats.lagGrowthMs() + " ms");
+        if (!liveScanner.running()) {
+            String failure = stats.status();
+            stopLiveScan(); monitorStatus.setText(failure); message(failure, true);
+        }
+    }
+
+    private void stopLiveScan() {
+        scanGeneration++;
+        scanPoll.stop(); liveScanner.close(); monitoring = false;
+        room.setDisable(false); monitor.setText("开始扫描"); monitorStatus.setText("等待中");
+        previewTitle.setText("等待直播扫描");
+        if (scanDialog != null) scanDialog.close();
+    }
+
+    // Injectable boundary for UI lifecycle tests; never creates native workers in those tests.
+    void setLiveScanner(LiveScanService scanner) { liveScanner.close(); liveScanner = scanner; }
 
     private void logout() {
         dispose();
@@ -432,6 +488,7 @@ public final class AccountView extends BorderPane {
     }
 
     public void dispose() {
+        stopLiveScan();
         generation++;
         if (phoneDialog != null) phoneDialog.close();
         if (tokenDialog != null) tokenDialog.close();

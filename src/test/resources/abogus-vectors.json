@@ -1,0 +1,14 @@
+[
+  {
+    "query": "aid=6383&web_rid=123456&msToken=",
+    "ua": "Mozilla/5.0",
+    "timestamp": 1794528000123,
+    "signature": "E7mhBmg6mEVNgf6X5X5LfY3q6-Z3YIwZ0HViMD2fsdfLrL39HMTa9exovItvkwjjF4/JIeYjy4hbO3xprQAjM36UHWwEUdQ2mgWkKl5Q5I0j53iruyRDntmF4vj3SFlm5XNAEOk0y75rKb70Woqe-vIlO62-zo0/9lS="
+  },
+  {
+    "query": "name=%E4%B8%AD%E6%96%87&msToken=&x=a%2Bb",
+    "ua": "Test UA/116.0",
+    "timestamp": 1794528000123,
+    "signature": "E7mhBmg6mEVNgf6X5X5LfY3q6XH3Y6vZ0HViMD2fzd3prL39HMTa9exovItvkwjjF4/JIeYjy4hbO3xprQAjM36UHWwEUdQ2mgWkKl5Q5I0j53iruyRDntmF4vj3SFlm5XNAEOk0y75rKb70Woqe-vIlO62-zo0/96L="
+  }
+]

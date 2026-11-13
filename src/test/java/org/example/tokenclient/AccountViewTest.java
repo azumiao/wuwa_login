@@ -149,7 +149,7 @@ class AccountViewTest {
             field(view, "room-input").setText("123");
             button(view, "monitor-button").fire();
             assertEquals("等待中", label(view, "monitor-status").getText());
-            assertTrue(label(view, "feedback").getText().contains("后续阶段"));
+            assertTrue(label(view, "feedback").getText().contains("不支持游戏扫码"));
             button(view, "logout-button").fire();
             assertEquals("", field(view, "token-input").getText());
             assertFalse(field(view, "token-visible").isVisible());
@@ -731,6 +731,50 @@ class AccountViewTest {
             return null;
         });
         fx(() -> { assertEquals(2, validations.get()); assertEquals(did, store.saved.deviceId()); return null; });
+    }
+
+    @Test void liveQrOpensConfirmationAndLogoutStopsCapture() throws Exception {
+        AtomicInteger reads = new AtomicInteger(), logins = new AtomicInteger();
+        class LiveAuth implements AuthService, ScanService {
+            public CompletionStage<Result> loginWithToken(String token) {
+                return CompletableFuture.completedFuture(new Result(true,"成功",new Session("测试账号",token)));
+            }
+            public CompletionStage<ScanResult> roles(Session session, String qr) {
+                reads.incrementAndGet(); return CompletableFuture.completedFuture(new ScanResult(Status.SUCCESS,"扫码成功"));
+            }
+            public CompletionStage<ScanResult> scan(Session session, String qr, String role, String sms) {
+                logins.incrementAndGet(); return CompletableFuture.completedFuture(new ScanResult(Status.SUCCESS,"成功"));
+            }
+            public CompletionStage<CodeResult> sendScanCode(Session session, String proof) { throw new AssertionError(); }
+        }
+        BlockingQueue<VideoFrame> frames = new LinkedBlockingQueue<>();
+        CountDownLatch closed = new CountDownLatch(1);
+        var scanner = new LiveScanService(room -> new LiveScanService.FrameSource() {
+            public VideoFrame read() throws InterruptedException { return frames.take(); }
+            public void close() { closed.countDown(); }
+        }, () -> new LiveScanService.Decoder() {
+            public java.util.List<String> decode(VideoFrame frame) { return java.util.List.of(KuroAuthServiceTest.QR); }
+            public void close() { }
+        }, java.time.Duration.ofSeconds(5));
+        AccountView current = fx(() -> {
+            var v = persistentView(new LiveAuth(),new MemoryCredentials(),owner -> CompletableFuture.completedFuture(null));
+            v.setLiveScanner(scanner);
+            field(v,"token-input").setText("test-token"); button(v,"login-button").fire(); return v;
+        });
+        fx(() -> {
+            field(current,"room-input").setText("123456"); button(current,"monitor-button").fire();
+            assertTrue(field(current,"room-input").isDisabled()); return null;
+        });
+        frames.add(new VideoFrame(1,1,3,new byte[3],0,System.nanoTime()));
+        eventually(() -> reads.get()==1);
+        fx(() -> {
+            var pane = dialog("scan-dialog");
+            assertFalse(button(pane,"confirm-qr").isDisabled()); assertEquals(0,logins.get());
+            button(pane,"confirm-qr").fire(); return null;
+        });
+        eventually(() -> logins.get()==1);
+        fx(() -> { close(dialog("scan-dialog")); button(current,"logout-button").fire(); return null; });
+        assertTrue(closed.await(3,TimeUnit.SECONDS)); assertFalse(scanner.running());
     }
 
     private AccountView view(AuthService auth, boolean demo, java.util.function.Consumer<String> copy) {
