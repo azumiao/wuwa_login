@@ -45,13 +45,9 @@ mvn -Papp clean package
 
 首次构建需要联网下载依赖，默认先运行测试再打包。macOS 脚本若提示没有执行权限，先执行 `chmod +x build-app.command`。从 Finder 启动找不到 Maven 时，可在终端执行上述命令，或先将 Maven 加入 `PATH`。
 
-分发时，macOS 复制整个 `WuwaLogin.app`；Windows/Linux 压缩并分发整个 `WuwaLogin` 文件夹，不能只复制其中的可执行文件。JavaCPP 原生库保留独立 JAR，避免合并 JAR 后丢失原生资源或签名。产物包含运行环境和原生库，体积会较大。
-
 需要在目标系统上打包：macOS 的 Intel 与 Apple Silicon 版本分别使用对应架构的 JDK 构建，不能在 Linux 上生成可用的 `.app` 或 Windows `.exe`。这里生成的是免安装应用，macOS 版本未做 Developer ID 签名或公证；分发到其他 Mac 时可能需要按系统提示允许打开。Linux 仍需系统图形桌面及 JavaFX 所需的系统图形库。
 
-当前已在 Linux x64 完成完整构建、现有测试和应用包独立启动验证；macOS、Windows 产物需在对应系统验证。
-
-## 感谢
+## 感谢以下项目
 
 - [mxyooR/Kuro_login](https://github.com/mxyooR/Kuro_login)
 - [DSVVA/KuRo_Scanner](https://github.com/DSVVA/KuRo_Scanner)
