@@ -12,17 +12,63 @@ class LiveScanServiceTest {
     private static final class Source implements LiveScanService.FrameSource {
         final BlockingQueue<VideoFrame> frames = new LinkedBlockingQueue<>();
         final CountDownLatch closed = new CountDownLatch(1);
-        public VideoFrame read() throws InterruptedException { var f = frames.take(); return f.width()==0 ? null : f; }
-        public void close() { closed.countDown(); }
+        public VideoFrame read() throws InterruptedException { var f = frames.take(); if (f.width()!=0) return f; f.close(); return null; }
+        public void close() { frames.forEach(VideoFrame::close); frames.clear(); closed.countDown(); }
     }
     private static abstract class Decoder implements LiveScanService.Decoder { public void close() { } }
+    @Test void pooledFramesSurviveOverwritePauseAndStopUntilNativeDecodeReturns() throws Exception {
+        var pool = new FrameBufferPool();
+        BlockingQueue<Integer> numbers = new LinkedBlockingQueue<>();
+        CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1);
+        CountDownLatch sourceClosed = new CountDownLatch(1), decoderClosed = new CountDownLatch(1);
+        AtomicInteger retainedPixel = new AtomicInteger();
+        LiveScanService.FrameSource source = new LiveScanService.FrameSource() {
+            public VideoFrame read() throws InterruptedException {
+                int n = numbers.take();
+                var frame = pool.acquire(1, 1, 3, n * 33333L, System.nanoTime());
+                frame.pixels().put(0, (byte) n);
+                return frame;
+            }
+            public void close() { pool.close(); sourceClosed.countDown(); }
+        };
+        Decoder decoder = new Decoder() {
+            public List<String> decode(VideoFrame frame) {
+                started.countDown();
+                // Simulate a native operation which cannot be interrupted by stopping the service.
+                while (true) try { release.await(); break; } catch (InterruptedException ignored) { }
+                retainedPixel.set(frame.pixels().get(0));
+                return List.of();
+            }
+            public void close() { decoderClosed.countDown(); }
+        };
+        try (var service = new LiveScanService(r -> source, () -> decoder, Duration.ofSeconds(5))) {
+            service.start("123", c -> fail("Unexpected code")); numbers.add(1);
+            assertTrue(started.await(3, TimeUnit.SECONDS));
+            for (int n = 2; n <= 100; n++) numbers.add(n);
+            await(() -> service.stats().frames() == 100);
+            assertEquals(3, pool.allocations());
+            service.pause();
+            assertEquals(1, pool.outstanding());
+            for (int n = 101; n <= 200; n++) numbers.add(n);
+            await(() -> service.stats().frames() == 200);
+            await(() -> pool.outstanding() == 1);
+            service.close();
+            assertTrue(sourceClosed.await(3, TimeUnit.SECONDS));
+            assertEquals(1, pool.outstanding(), "Stopping must retain memory still used by native decode");
+            release.countDown();
+            assertTrue(decoderClosed.await(3, TimeUnit.SECONDS));
+            assertEquals(1, retainedPixel.get());
+            assertEquals(0, pool.outstanding());
+        } finally { release.countDown(); }
+    }
+
     @Test void slowRecognitionSkipsHistoryAndCaptureContinuesWithoutPreview() throws Exception {
         Source source = new Source();
         CountDownLatch started = new CountDownLatch(1), release = new CountDownLatch(1), second = new CountDownLatch(1);
         List<Integer> seen = new CopyOnWriteArrayList<>();
         Decoder decoder = new Decoder() {
             public List<String> decode(VideoFrame f) throws InterruptedException {
-                seen.add((int)f.bgr()[0]);
+                seen.add((int)f.pixels().get(0));
                 if (seen.size()==1) { started.countDown(); release.await(); } else second.countDown();
                 return List.of();
             }
@@ -64,6 +110,25 @@ class LiveScanServiceTest {
             await(() -> service.stats().stale()>0); assertEquals(0,detected.get());
         }
     }
+    @Test void expiredAndFailedFramesReturnTheirLeases() throws Exception {
+        for (boolean expired : List.of(true, false)) {
+            var pool = new FrameBufferPool();
+            Source source = new Source();
+            var input = pool.acquire(1, 1, 3, 0, expired ? 0 : System.nanoTime());
+            Decoder decoder = new Decoder() {
+                public List<String> decode(VideoFrame frame) {
+                    assertFalse(expired, "Expired frames must be released without decoding");
+                    throw new IllegalArgumentException("simulated decoder failure");
+                }
+            };
+            try (pool; var service = new LiveScanService(r -> source, () -> decoder, Duration.ofSeconds(5))) {
+                service.start("123", c -> fail("Unexpected QR")); source.frames.add(input);
+                if (expired) await(() -> service.stats().stale() == 1);
+                else await(() -> !service.running());
+                await(() -> pool.outstanding() == 0);
+            }
+        }
+    }
     @Test void candidateWaitsForConfirmationWhileCaptureKeepsReading() throws Exception {
         Source source = new Source(); BlockingQueue<LiveScanService.Candidate> found = new LinkedBlockingQueue<>();
         Decoder decoder = new Decoder() { public List<String> decode(VideoFrame f) { return List.of(KuroAuthServiceTest.QR); } };
@@ -83,7 +148,7 @@ class LiveScanServiceTest {
         BlockingQueue<LiveScanService.Candidate> found = new LinkedBlockingQueue<>();
         Decoder decoder = new Decoder() {
             public List<String> decode(VideoFrame f) throws InterruptedException {
-                if (f.bgr()[0]==1) { decoding.countDown(); release.await(); }
+                if (f.pixels().get(0)==1) { decoding.countDown(); release.await(); }
                 return List.of(KuroAuthServiceTest.QR);
             }
         };

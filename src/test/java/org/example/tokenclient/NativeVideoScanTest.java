@@ -29,11 +29,16 @@ class NativeVideoScanTest {
         }
         try (var source = new FfmpegVideoSource(new DouyinStreamResolver.Source(video.toString(),Map.of()));
              var decoder = new WechatQrDecoder()) {
-            var first = source.read(); assertNotNull(first);
-            byte[] pixels = first.bgr().clone();
-            var second = source.read(); assertNotNull(second); assertTrue(second.ptsUs()>first.ptsUs());
-            assertArrayEquals(pixels,first.bgr(),"Reading another frame must not overwrite retained pixels");
-            assertTrue(decoder.decode(first).contains(KuroAuthServiceTest.QR));
+            try (var first = source.read(); var second = source.read()) {
+                assertNotNull(first); assertNotNull(second); assertTrue(second.ptsUs()>first.ptsUs());
+                byte[] pixels = new byte[first.stride() * first.height()]; first.pixels().get(pixels);
+                try (var third = source.read()) {
+                    byte[] retained = new byte[pixels.length]; first.pixels().get(retained);
+                    assertArrayEquals(pixels,retained,"Reading another frame must not overwrite retained pixels");
+                    assertNotEquals(first.pixels().address(), third.pixels().address());
+                }
+                assertTrue(decoder.decode(first).contains(KuroAuthServiceTest.QR));
+            }
         }
     }
 }

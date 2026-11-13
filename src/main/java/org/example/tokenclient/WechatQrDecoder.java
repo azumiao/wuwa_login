@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.*;
-import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.bytedeco.opencv.opencv_wechat_qrcode.WeChatQRCode;
 import static org.bytedeco.opencv.global.opencv_core.CV_8UC3;
@@ -21,8 +20,7 @@ final class WechatQrDecoder implements LiveScanService.Decoder {
         detector.setScaleFactor(0.4f);
     }
     @Override public List<String> decode(VideoFrame frame) {
-        try (var bytes = new BytePointer(frame.bgr());
-             var mat = new Mat(frame.height(), frame.width(), CV_8UC3, bytes, frame.stride());
+        try (var mat = new Mat(frame.height(), frame.width(), CV_8UC3, frame.pixels(), frame.stride());
              var codes = detector.detectAndDecode(mat)) {
             List<String> found = new ArrayList<>();
             for (long i = 0; i < codes.size(); i++) {

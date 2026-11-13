@@ -10,6 +10,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javafx.version>21.0.6</javafx.version>
         <app.demo>false</app.demo>
+        <app.scan.decoderThreads>2</app.scan.decoderThreads>
         <javacpp.platform>linux-x86_64</javacpp.platform>
     </properties>
     <dependencies>
@@ -69,6 +70,7 @@
                     <mainClass>org.example.Main</mainClass>
                     <options>
                         <option>-Dapp.demo=${app.demo}</option>
+                        <option>-Dapp.scan.decoderThreads=${app.scan.decoderThreads}</option>
                         <option>--enable-native-access=ALL-UNNAMED</option>
                     </options>
                 </configuration>

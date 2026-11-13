@@ -7,7 +7,9 @@ import java.util.function.Consumer;
 
 /** Capture never waits for recognition or UI. At most one waiting frame, plus the frame being decoded. */
 final class LiveScanService implements AutoCloseable {
+    /** Transfers a frame lease to the caller, which must close it even when skipping recognition. */
     interface FrameSource extends AutoCloseable { VideoFrame read() throws Exception; }
+    /** Borrows pixels only for this call; the caller retains and releases the lease. */
     interface Decoder extends AutoCloseable { List<String> decode(VideoFrame frame) throws Exception; }
     interface SourceFactory { FrameSource open(String room) throws Exception; }
     interface DecoderFactory { Decoder create() throws Exception; }
@@ -43,9 +45,9 @@ final class LiveScanService implements AutoCloseable {
     }
     void resume() {
         Run r = current;
-        if (r != null) { r.pending.set(null); r.paused.set(false); }
+        if (r != null) { discardPending(r); r.paused.set(false); }
     }
-    void pause() { Run r = current; if (r != null) { r.paused.set(true); r.pending.set(null); } }
+    void pause() { Run r = current; if (r != null) { r.paused.set(true); discardPending(r); } }
     void suppress(String code) {
         Run r = current;
         if (r != null) synchronized (r.terminalCodes) {
@@ -70,7 +72,7 @@ final class LiveScanService implements AutoCloseable {
     private void captureLoop(Run r) {
         int failures = 0;
         while (active(r)) {
-            long connection = r.connection.incrementAndGet(); r.pending.set(null);
+            long connection = r.connection.incrementAndGet(); discardPending(r);
             setStatus(r, failures == 0 ? "正在连接抖音直播…" : "连接中断，正在重新获取直播流…");
             long basePts = -1, baseTime = 0, previousPts = -1;
             int healthyFrames = 0;
@@ -80,25 +82,32 @@ final class LiveScanService implements AutoCloseable {
                 while (active(r)) {
                     VideoFrame frame = source.read();
                     if (frame == null) throw new java.io.IOException("Stream ended");
-                    if (!active(r)) return;
-                    // PTS discontinuity invalidates in-flight results and resets the delay baseline.
-                    if (previousPts >= 0 && frame.ptsUs() < previousPts) {
-                        connection = r.connection.incrementAndGet(); r.pending.set(null); basePts = -1;
-                    }
-                    previousPts = frame.ptsUs();
-                    if (basePts < 0) { basePts = frame.ptsUs(); baseTime = frame.decodedAtNs(); }
-                    r.lagGrowthMs = Math.max(0, (frame.decodedAtNs() - baseTime) / 1_000_000 - (frame.ptsUs() - basePts) / 1000);
-                    if (r.lagGrowthMs > 2500) throw new java.io.IOException("Growing stream delay");
-                    long sequence = r.frames.incrementAndGet();
-                    if (++healthyFrames >= 150) failures = 0;
-                    if (!r.paused.get()) {
-                        if (r.pending.getAndSet(new Pending(frame, connection, sequence)) != null) r.dropped.incrementAndGet();
-                        synchronized (r.signal) { r.signal.notifyAll(); }
-                    }
+                    boolean published = false;
+                    try {
+                        if (!active(r)) return;
+                        // PTS discontinuity invalidates in-flight results and resets the delay baseline.
+                        if (previousPts >= 0 && frame.ptsUs() < previousPts) {
+                            connection = r.connection.incrementAndGet(); discardPending(r); basePts = -1;
+                        }
+                        previousPts = frame.ptsUs();
+                        if (basePts < 0) { basePts = frame.ptsUs(); baseTime = frame.decodedAtNs(); }
+                        r.lagGrowthMs = Math.max(0, (frame.decodedAtNs() - baseTime) / 1_000_000 - (frame.ptsUs() - basePts) / 1000);
+                        if (r.lagGrowthMs > 2500) throw new java.io.IOException("Growing stream delay");
+                        long sequence = r.frames.incrementAndGet();
+                        if (++healthyFrames >= 150) failures = 0;
+                        if (!r.paused.get()) {
+                            Pending previous = r.pending.getAndSet(new Pending(frame, connection, sequence));
+                            published = true;
+                            if (previous != null) { previous.frame.close(); r.dropped.incrementAndGet(); }
+                            // Stop/pause can race with publication. Either this worker or the consumer releases it.
+                            if (!active(r) || r.paused.get()) discardPending(r);
+                            synchronized (r.signal) { r.signal.notifyAll(); }
+                        }
+                    } finally { if (!published) frame.close(); }
                 }
             } catch (InterruptedException e) { Thread.currentThread().interrupt(); return;
             } catch (Exception | LinkageError e) {
-                r.connection.incrementAndGet(); r.pending.set(null);
+                r.connection.incrementAndGet(); discardPending(r);
                 if (!active(r)) return;
                 if (e instanceof DouyinStreamResolver.Offline || ++failures > 3 || e instanceof LinkageError) {
                     String message = e instanceof DouyinStreamResolver.Offline || e instanceof DouyinStreamResolver.Failure
@@ -117,28 +126,32 @@ final class LiveScanService implements AutoCloseable {
             initialized = true;
             while (active(r)) {
                 Pending p = r.pending.getAndSet(null);
-                if (p == null || r.paused.get()) {
+                if (p == null) {
                     synchronized (r.signal) { if (active(r) && r.pending.get() == null) r.signal.wait(100); }
                     continue;
                 }
-                if (System.nanoTime() - p.frame.decodedAtNs() > maxAgeNs) { r.stale.incrementAndGet(); continue; }
-                long start = System.nanoTime();
-                List<String> codes = decoder.decode(p.frame);
-                long end = System.nanoTime();
-                r.scanned.incrementAndGet(); r.decodeMs = (end-start)/1_000_000;
-                r.ageMs = (end-p.frame.decodedAtNs())/1_000_000;
-                if (!active(r) || p.connection != r.connection.get() || end-p.frame.decodedAtNs() > maxAgeNs) {
-                    r.stale.incrementAndGet(); continue;
-                }
-                for (String code : codes) {
-                    if (!KuroAuthService.validQr(code)) continue;
-                    synchronized (r.terminalCodes) { if (r.terminalCodes.contains(code)) continue; }
-                    if (code.equals(r.lastCode) && end-r.lastCodeTime < Duration.ofSeconds(5).toNanos()) continue;
-                    if (r.paused.compareAndSet(false, true)) {
-                        r.lastCode = code; r.lastCodeTime = end;
-                        r.detected.accept(new Candidate(code, r.id, p.connection, p.sequence, p.frame.decodedAtNs(), r.decodeMs));
+                try (VideoFrame frame = p.frame) {
+                    if (r.paused.get() || !active(r)) continue;
+                    if (System.nanoTime() - frame.decodedAtNs() > maxAgeNs) { r.stale.incrementAndGet(); continue; }
+                    long start = System.nanoTime();
+                    List<String> codes = decoder.decode(frame);
+                    long end = System.nanoTime();
+                    r.scanned.incrementAndGet(); r.decodeMs = (end-start)/1_000_000;
+                    r.ageMs = (end-frame.decodedAtNs())/1_000_000;
+                    if (!active(r) || p.connection != r.connection.get() || end-frame.decodedAtNs() > maxAgeNs) {
+                        r.stale.incrementAndGet(); continue;
                     }
-                    break;
+                    for (String code : codes) {
+                        if (!KuroAuthService.validQr(code)) continue;
+                        synchronized (r.terminalCodes) { if (r.terminalCodes.contains(code)) continue; }
+                        if (code.equals(r.lastCode) && end-r.lastCodeTime < Duration.ofSeconds(5).toNanos()) continue;
+                        if (r.paused.compareAndSet(false, true)) {
+                            discardPending(r);
+                            r.lastCode = code; r.lastCodeTime = end;
+                            r.detected.accept(new Candidate(code, r.id, p.connection, p.sequence, frame.decodedAtNs(), r.decodeMs));
+                        }
+                        break;
+                    }
                 }
             }
         } catch (InterruptedException e) { Thread.currentThread().interrupt();
@@ -146,8 +159,12 @@ final class LiveScanService implements AutoCloseable {
             fail(r, ScanFailure.message(initialized ? ScanFailure.Phase.QR_DECODE : ScanFailure.Phase.QR_INIT, e), e);
         } finally {
             if (active(r)) fail(r, "二维码识别线程意外结束，请查看控制台诊断后重试。", null);
-            r.pending.set(null);
+            discardPending(r);
         }
+    }
+    private static void discardPending(Run r) {
+        Pending pending = r.pending.getAndSet(null);
+        if (pending != null) pending.frame.close();
     }
     private void setStatus(Run r, String status) {
         synchronized (r) { if (active(r)) r.status = status; }
@@ -157,7 +174,7 @@ final class LiveScanService implements AutoCloseable {
             if (!active(r)) return;
             r.status = message;
             r.stopped = true;
-            r.pending.set(null);
+            discardPending(r);
             r.capture.interrupt(); r.scan.interrupt();
         }
         if (error != null) System.getLogger(LiveScanService.class.getName()).log(System.Logger.Level.ERROR,
@@ -166,7 +183,7 @@ final class LiveScanService implements AutoCloseable {
     @Override public synchronized void close() {
         Run old = current; current = null;
         if (old != null) {
-            old.stopped = true; old.pending.set(null);
+            old.stopped = true; discardPending(old);
             old.scan.interrupt(); old.capture.interrupt();
         }
     }

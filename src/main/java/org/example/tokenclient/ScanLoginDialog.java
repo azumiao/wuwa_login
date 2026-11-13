@@ -233,8 +233,8 @@ final class ScanLoginDialog extends Dialog<Void> {
                 if (java.nio.file.Files.size(file) > 20_000_000) throw new IllegalArgumentException();
                 var picture = ImageIO.read(file.toFile());
                 if (picture == null) throw new IllegalArgumentException();
-                try (var decoder = new WechatQrDecoder()) {
-                    return decoder.decode(VideoFrame.fromImage(picture)).stream()
+                try (var decoder = new WechatQrDecoder(); var frame = VideoFrame.fromImage(picture)) {
+                    return decoder.decode(frame).stream()
                             .filter(KuroAuthService::validQr).findFirst().orElseThrow();
                 }
             } catch (Exception error) { throw new CompletionException(new IllegalArgumentException("无法读取二维码")); }
