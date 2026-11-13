@@ -14,7 +14,6 @@ import java.util.regex.Pattern;
 final class DouyinStreamResolver {
     static final String UA = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.97 Safari/537.36 Core/1.116.567.400 QQBrowser/19.7.6764.400";
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Pattern STRING = Pattern.compile("\"(?:\\\\.|[^\"\\\\])*\"");
     private final HttpClient http;
     private final URI base;
 
@@ -131,19 +130,34 @@ final class DouyinStreamResolver {
                         if (!url.isEmpty()) return url;
                     }
                 }
-                var strings = STRING.matcher(text);
-                while (strings.find() && candidates.size() < 64) {
-                    String literal = strings.group();
-                    if (!literal.contains("stream_url")) continue;
-                    try {
-                        JsonNode node = JSON.readTree(literal);
-                        if (node.isTextual() && !node.asText().equals(text)) candidates.add(node.asText());
-                    } catch (IOException ignored) { }
-                }
+                appendDecodedStrings(text, candidates);
             }
             start = end;
         }
         return "";
+    }
+
+    private static void appendDecodedStrings(String text, List<String> candidates) {
+        // Flight strings can span megabytes. Java's repeated regex alternatives use one
+        // stack frame per character; scanning quotes/escapes directly uses constant stack.
+        for (int at = 0; at < text.length() && candidates.size() < 64;) {
+            if (text.charAt(at++) != '"') continue;
+            int start = at - 1;
+            boolean closed = false;
+            while (at < text.length()) {
+                char c = text.charAt(at++);
+                if (c == '\\') {
+                    if (at < text.length()) at++; // Skip the escaped character, including an escaped quote.
+                } else if (c == '"') { closed = true; break; }
+            }
+            if (!closed) break;
+            String literal = text.substring(start, at);
+            if (!literal.contains("stream_url")) continue;
+            try {
+                JsonNode node = JSON.readTree(literal);
+                if (node.isTextual() && !node.asText().equals(text)) candidates.add(node.asText());
+            } catch (IOException ignored) { }
+        }
     }
     private static JsonNode objectAt(String text, int at) {
         try (var parser = JSON.createParser(text.substring(at))) { return JSON.readTree(parser); }

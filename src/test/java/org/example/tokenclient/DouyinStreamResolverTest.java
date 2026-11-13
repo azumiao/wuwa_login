@@ -41,6 +41,20 @@ class DouyinStreamResolverTest {
         assertEquals(URL, DouyinStreamResolver.streamUrl(newer));
         assertEquals("https://cdn.example/a.m3u8", DouyinStreamResolver.streamUrl(JSON.readTree("{\"hls_pull_url\":\"https://cdn.example/a.m3u8\"}")));
     }
+    @Test @org.junit.jupiter.api.Timeout(5)
+    void readsLargeFlightPayloadWithoutRecursiveRegex() throws Exception {
+        String room = "{\"roomInfo\":{\"web_rid\":\"123\",\"status\":2,\"stream_url\":" + stream("origin") + "}}";
+        String flightData = "x".repeat(300_000) + "\\\"\\\\".repeat(20_000) + room;
+        String html = "<script>self.__next_f.push([1," + JSON.writeValueAsString(flightData) + "])</script>";
+        assertEquals(URL, DouyinStreamResolver.fromHtml(html, "123"));
+    }
+
+    @Test @org.junit.jupiter.api.Timeout(5)
+    void skipsLargeUnrelatedStringsAndUnterminatedLiteral() throws Exception {
+        String noise = JSON.writeValueAsString("x".repeat(300_000));
+        assertEquals("", DouyinStreamResolver.fromHtml("<script>var noise=" + noise + ";</script>", "123"));
+        assertEquals("", DouyinStreamResolver.fromHtml("\"" + "\\\\".repeat(100_000), "123"));
+    }
     @Test void signatureMatchesIndependentPythonReferenceVectors() throws Exception {
         try (var in = getClass().getResourceAsStream("/abogus-vectors.json")) {
             for (var v : JSON.readTree(in)) assertEquals(v.path("signature").asText(),

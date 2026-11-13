@@ -60,15 +60,23 @@ final class LiveScanService implements AutoCloseable {
     }
     private boolean active(Run r) { return current == r && !r.stopped; }
     private void capture(Run r) {
+        try { captureLoop(r); }
+        catch (StackOverflowError e) { fail(r, ScanFailure.message(ScanFailure.Phase.CAPTURE, e), e); }
+        finally {
+            // An unexpected worker exit must not leave the UI reporting an active scan.
+            if (active(r)) fail(r, "直播取流线程意外结束，请查看控制台诊断后重试。", null);
+        }
+    }
+    private void captureLoop(Run r) {
         int failures = 0;
         while (active(r)) {
             long connection = r.connection.incrementAndGet(); r.pending.set(null);
-            r.status = failures == 0 ? "正在连接抖音直播…" : "连接中断，正在重新获取直播流…";
+            setStatus(r, failures == 0 ? "正在连接抖音直播…" : "连接中断，正在重新获取直播流…");
             long basePts = -1, baseTime = 0, previousPts = -1;
             int healthyFrames = 0;
             try (FrameSource source = sources.open(r.room)) {
                 if (!active(r)) return;
-                r.status = "正在扫描直播二维码";
+                setStatus(r, "正在扫描直播二维码");
                 while (active(r)) {
                     VideoFrame frame = source.read();
                     if (frame == null) throw new java.io.IOException("Stream ended");
@@ -93,18 +101,20 @@ final class LiveScanService implements AutoCloseable {
                 r.connection.incrementAndGet(); r.pending.set(null);
                 if (!active(r)) return;
                 if (e instanceof DouyinStreamResolver.Offline || ++failures > 3 || e instanceof LinkageError) {
-                    r.status = e instanceof DouyinStreamResolver.Offline || e instanceof DouyinStreamResolver.Failure ? e.getMessage() : e instanceof LinkageError
-                            ? "视频组件加载失败，请检查运行平台" : "直播连接失败，请检查房间号、网络或开播状态后重试";
-                    r.stopped = true; r.scan.interrupt(); return;
+                    String message = e instanceof DouyinStreamResolver.Offline || e instanceof DouyinStreamResolver.Failure
+                            ? e.getMessage() : ScanFailure.message(ScanFailure.Phase.CAPTURE, e);
+                    fail(r, message, e); return;
                 }
                 // Only resolver messages are safe to expose; native exceptions can contain signed URLs.
-                r.status = "正在重连（" + failures + "/3）";
+                setStatus(r, "正在重连（" + failures + "/3）");
                 try { Thread.sleep(500L * failures); } catch (InterruptedException ex) { return; }
             }
         }
     }
     private void recognize(Run r) {
+        boolean initialized = false;
         try (Decoder decoder = decoders.create()) {
+            initialized = true;
             while (active(r)) {
                 Pending p = r.pending.getAndSet(null);
                 if (p == null || r.paused.get()) {
@@ -132,9 +142,26 @@ final class LiveScanService implements AutoCloseable {
                 }
             }
         } catch (InterruptedException e) { Thread.currentThread().interrupt();
-        } catch (Exception | LinkageError e) {
-            if (active(r)) { r.status = "二维码识别组件运行失败，请重试或检查模型文件"; r.stopped = true; r.capture.interrupt(); }
-        } finally { r.pending.set(null); }
+        } catch (Exception | LinkageError | StackOverflowError e) {
+            fail(r, ScanFailure.message(initialized ? ScanFailure.Phase.QR_DECODE : ScanFailure.Phase.QR_INIT, e), e);
+        } finally {
+            if (active(r)) fail(r, "二维码识别线程意外结束，请查看控制台诊断后重试。", null);
+            r.pending.set(null);
+        }
+    }
+    private void setStatus(Run r, String status) {
+        synchronized (r) { if (active(r)) r.status = status; }
+    }
+    private void fail(Run r, String message, Throwable error) {
+        synchronized (r) {
+            if (!active(r)) return;
+            r.status = message;
+            r.stopped = true;
+            r.pending.set(null);
+            r.capture.interrupt(); r.scan.interrupt();
+        }
+        if (error != null) System.getLogger(LiveScanService.class.getName()).log(System.Logger.Level.ERROR,
+                message + "\n" + ScanFailure.diagnostic(error));
     }
     @Override public synchronized void close() {
         Run old = current; current = null;

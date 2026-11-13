@@ -109,6 +109,64 @@ class LiveScanServiceTest {
             await(() -> service.stats().scanned()==1); assertEquals(0,found.get());
         }
     }
+    @Test void captureStackOverflowStopsBothWorkersAndPreservesCaptureFailure() throws Exception {
+        CountDownLatch decoderClosed = new CountDownLatch(1);
+        try (var service = new LiveScanService(room -> { throw new StackOverflowError("simulated page parser failure"); },
+                () -> new Decoder() {
+                    public List<String> decode(VideoFrame frame) { fail("No frames should be decoded"); return List.of(); }
+                    public void close() { decoderClosed.countDown(); }
+                }, Duration.ofSeconds(5))) {
+            service.start("123", c -> fail("Unexpected QR"));
+            await(() -> !service.running());
+            assertTrue(decoderClosed.await(3, TimeUnit.SECONDS));
+            assertTrue(service.stats().status().contains("直播取流/解码失败"));
+            assertTrue(service.stats().status().contains("StackOverflowError"));
+            assertFalse(service.stats().status().contains("二维码识别"));
+        }
+    }
+
+    @Test void nativeInitializationFailureShowsCauseAndStopsCapture() throws Exception {
+        Source source = new Source(); CountDownLatch opened = new CountDownLatch(1);
+        try (var service = new LiveScanService(room -> { opened.countDown(); return source; }, () -> {
+            assertTrue(opened.await(3, TimeUnit.SECONDS));
+            var error = new NoClassDefFoundError("Could not initialize native QR detector");
+            error.initCause(new UnsatisfiedLinkError("no jniopencv_wechat_qrcode in java.library.path"));
+            throw error;
+        }, Duration.ofSeconds(5))) {
+            service.start("123", c -> fail("Unexpected QR"));
+            await(() -> !service.running());
+            assertTrue(source.closed.await(3, TimeUnit.SECONDS));
+            String status = service.stats().status();
+            assertTrue(status.contains("二维码识别初始化失败"));
+            assertTrue(status.contains("NoClassDefFoundError"));
+            assertTrue(status.contains("UnsatisfiedLinkError"));
+            assertTrue(status.contains("原生库加载失败"));
+        }
+    }
+
+    @Test void recognitionFailureIsDistinctFromInitialization() throws Exception {
+        Source source = new Source();
+        try (var service = new LiveScanService(room -> source, () -> new Decoder() {
+            public List<String> decode(VideoFrame frame) { throw new IllegalArgumentException("invalid image dimensions"); }
+        }, Duration.ofSeconds(5))) {
+            service.start("123", c -> fail("Unexpected QR")); source.frames.add(frame(1));
+            await(() -> !service.running());
+            assertTrue(source.closed.await(3, TimeUnit.SECONDS));
+            assertTrue(service.stats().status().contains("QR_DECODE"));
+            assertFalse(service.stats().status().contains("初始化"));
+        }
+    }
+
+    @Test void diagnosticsRedactStreamUrlsAndQrPayloadsAndBoundLongExceptions() {
+        String url = "https://cdn.example/live.flv?token=stream-secret&sign=secret-sign";
+        Throwable error = new IllegalStateException("decode " + url + " " + KuroAuthServiceTest.QR
+                + " token=token-secret cookie=cookie-secret " + "x".repeat(100_000));
+        String diagnostic = ScanFailure.diagnostic(error);
+        for (String secret : List.of(url, "stream-secret", "secret-sign", KuroAuthServiceTest.QR, "token-secret", "cookie-secret"))
+            assertFalse(diagnostic.contains(secret));
+        assertTrue(diagnostic.contains("IllegalStateException"));
+        assertTrue(diagnostic.length() < 2500);
+    }
     private static void await(java.util.function.BooleanSupplier check) throws InterruptedException {
         long end = System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
         while (!check.getAsBoolean() && System.nanoTime()<end) Thread.sleep(5);
